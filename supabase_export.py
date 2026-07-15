@@ -36,8 +36,12 @@ def load_env(path: Path = BASE_DIR / ".env"):
 
 def get_client():
     load_env()
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_SERVICE_KEY"]
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not url:
+        raise ValueError("SUPABASE_URL environment variable is missing or empty. Please set it in environment variables or Secret Manager.")
+    if not key:
+        raise ValueError("SUPABASE_SERVICE_KEY environment variable is missing or empty. Please set it in environment variables or Secret Manager.")
     return create_client(url, key)
 
 
@@ -49,7 +53,8 @@ def push_run(leads_csv: str, rejects_csv: str, run_id: str,
         "run_id": run_id, "status": "running", "triggered_by": triggered_by,
     }).execute()
 
-    leads = list(csv.DictReader(open(leads_csv, encoding="utf-8")))
+    with open(leads_csv, encoding="utf-8") as f:
+        leads = list(csv.DictReader(f))
     for row in leads:
         row["run_id"] = run_id
     if leads:
@@ -59,7 +64,8 @@ def push_run(leads_csv: str, rejects_csv: str, run_id: str,
                 leads[i:i + 200], on_conflict="run_id,domain"
             ).execute()
 
-    rejects = list(csv.DictReader(open(rejects_csv, encoding="utf-8")))
+    with open(rejects_csv, encoding="utf-8") as f:
+        rejects = list(csv.DictReader(f))
     for row in rejects:
         row["run_id"] = run_id
     if rejects:

@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+cache/
+output/
+__pycache__/
+.venv/
+.DS_Store
+Dockerfile
+dockerfile
+*.csv
+*.log
