@@ -36,8 +36,8 @@ def load_env(path: Path = BASE_DIR / ".env"):
 
 def get_client():
     load_env()
-    url = os.environ["https://gftpbrfdsgnbfchqdfiu.supabase.co"]
-    key = os.environ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmdHBicmZkc2duYmZjaHFkZml1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzk3MzAwMiwiZXhwIjoyMDk5NTQ5MDAyfQ.MvPP3kwh-AcfRHN5yANtHncsGf_Edfo-RVM9aiyjiFU"]
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_SERVICE_KEY"]
     return create_client(url, key)
 
 
