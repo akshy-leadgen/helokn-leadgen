@@ -1,5 +1,5 @@
 """
-api.py — hardened HTTP wrapper around the pipeline, for Cloud Run.
+api.py — hardened HTTP wrapper around the pipeline, for Render/Cloud Run.
 
 Endpoints:
   GET  /health   liveness check (no auth)
@@ -12,27 +12,48 @@ Security:
     Without this, anyone who found the URL could burn your Serper
     credits by hammering the endpoint.
   * All secrets (SERPER_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY,
-    RUN_API_KEY) come from environment variables set on the Cloud Run
-    service — nothing is baked into the image.
+    RUN_API_KEY) come from environment variables set on the host —
+    nothing is baked into the image.
 
 CORS:
   The Lovable dashboard calls POST /run from the browser, which requires
   CORS headers. Locked to *.lovable.app plus localhost for testing; add
   your custom domain to ALLOWED_ORIGIN_REGEX if you attach one later.
 
-Cloud Run note (important):
-  The pipeline runs as a BACKGROUND task after /run returns. Cloud Run
-  throttles CPU to ~0 after the response unless the service is deployed
-  with CPU always allocated. Deploy with `--no-cpu-throttling` (the
-  DEPLOY_GUIDE does this) or the background run will stall silently.
+IMPORTANT — free-tier idle spin-down (this bit us in production):
+  Render's (and similarly, some Cloud Run configs') free tier spins the
+  container down after ~15 min with no INCOMING HTTP traffic — even if
+  a background task is still actively running inside it. Since /run
+  returns immediately and the pipeline keeps working in the background,
+  a run with no further requests hitting the service gets silently
+  killed mid-flight: no error, no traceback, the pipeline_runs row just
+  stays "running" forever. This class of bug is why a run can appear to
+  vanish into nothing.
+
+  Two independent mitigations, both included:
+    1. The dashboard pings /health every ~15s while a run shows
+       "running" (client-side keep-alive) — but only while that
+       browser tab is open.
+    2. THIS FILE also self-pings its own public URL every 4 minutes
+       for the duration of the subprocess (server-side keep-alive) —
+       works even if every browser tab is closed. Requires SELF_URL to
+       be set (falls back to Render's auto-provided RENDER_EXTERNAL_URL
+       if present).
+
+  Neither is a substitute for a real job queue (Celery/RQ/Cloud Tasks/
+  Render Background Worker) for production-grade reliability — this is
+  an MVP-appropriate mitigation, documented as such.
 """
 
 import os
 import secrets
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
+import requests
 from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -41,6 +62,10 @@ import supabase_export
 
 APP_DIR = Path(__file__).resolve().parent
 RUN_API_KEY = os.environ.get("RUN_API_KEY", "")
+SELF_URL = (os.environ.get("SELF_URL")
+           or os.environ.get("RENDER_EXTERNAL_URL")
+           or "").rstrip("/")
+KEEPALIVE_INTERVAL_SEC = 4 * 60   # well under Render's ~15 min idle window
 
 app = FastAPI(title="Helokn Lead Gen API")
 
@@ -69,15 +94,35 @@ def health():
     return {"status": "ok"}
 
 
+def _keepalive_loop(stop_event: threading.Event):
+    """Pings this service's own public URL periodically so the platform
+    sees real inbound traffic and doesn't spin the container down while
+    a long-running background pipeline job is still in flight."""
+    if not SELF_URL:
+        print("! SELF_URL/RENDER_EXTERNAL_URL not set — server-side "
+              "keep-alive is disabled. Set SELF_URL to your public "
+              "service URL to enable it.")
+        return
+    while not stop_event.wait(KEEPALIVE_INTERVAL_SEC):
+        try:
+            requests.get(f"{SELF_URL}/health", timeout=10)
+        except requests.RequestException as e:
+            print(f"! keep-alive ping failed (non-fatal): {e}")
+
+
 def _run_pipeline(mode: str, triggered_by: str, run_id: str):
     sb = supabase_export.get_client()
+    stop_keepalive = threading.Event()
+    keepalive_thread = threading.Thread(
+        target=_keepalive_loop, args=(stop_keepalive,), daemon=True)
+    keepalive_thread.start()
     try:
         sb.table("pipeline_runs").upsert({
             "run_id": run_id, "status": "running",
             "triggered_by": triggered_by,
         }).execute()
 
-        cmd = ["python", "run.py"] + (["--full"] if mode == "full" else [])
+        cmd = ["python", "-u", "run.py"] + (["--full"] if mode == "full" else [])
         subprocess.run(cmd, check=True, cwd=APP_DIR, timeout=60 * 45)
 
         # run.py stamps output files with its own timestamp; find the
@@ -98,6 +143,8 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         except Exception:
             pass
         raise
+    finally:
+        stop_keepalive.set()
 
 
 @app.post("/run")
