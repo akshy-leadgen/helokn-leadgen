@@ -73,6 +73,11 @@ ROLE_LOCALPARTS = {
     "professionaldevelopment", "workforce", "hr", "membership", "programs",
     "certifications", "credentials", "recertification", "testing",
     "accreditation", "examinations",
+    # widened for the certification/licensing-body-heavy ICP mix: these are
+    # exactly the inboxes small boards/associations actually publish for
+    # exam/license administration, found missing during the v6 audit.
+    "registrar", "licensing", "renewal", "renewals", "records",
+    "registration", "credentialingdept", "certboard", "examdept",
 }
 
 # Buyer titles, highest priority first (used for named-contact matching).
@@ -109,6 +114,45 @@ NAME_RE_OVERLAP = re.compile(
     r"(?=\b([A-Z][a-z]+(?: [A-Z]\.)? [A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b)")
 
 _LOWER_TITLE_WORDS = {"of", "and", "for", "the", "in"}
+
+# Words that disqualify a NAME_RE candidate from being a real person's name.
+# Found via audit: "Director Ron", "Highland Avenue", "Member Benefits",
+# "Certification Resources", "Oregon Community", "Community Center", and
+# "Consumer Voice" all passed the old regex-only check because ANY two
+# consecutive Title-Case words within 120 chars of a title match qualified
+# — nav links, address fragments, and section headers all match that shape.
+#
+# Two categories, both real failure modes seen in production:
+#  1. Title/role words — a SECOND, unrelated mention of "Director" etc.
+#     elsewhere on the page (not the one TITLE_RE just matched) can itself
+#     get captured as if it were a first name ("Director Ron").
+#  2. Institutional/navigational/address nouns — "Benefits", "Resources",
+#     "Community", "Avenue" etc. are page-chrome words, never surnames.
+_NAME_DISQUALIFYING_WORDS = {
+    # role/title words (catches a stray second title mention)
+    "director", "manager", "coordinator", "specialist", "administrator",
+    "president", "chief", "officer", "executive", "chair", "chairman",
+    "chairwoman", "vice", "senior", "associate", "assistant", "deputy",
+    "founder", "head", "lead", "supervisor", "board",
+    # institutional / navigational / address nouns
+    "avenue", "street", "road", "boulevard", "drive", "suite", "floor",
+    "building", "room", "community", "center", "centre", "resources",
+    "resource", "benefits", "benefit", "services", "service", "program",
+    "programs", "department", "committee", "office", "bureau", "division",
+    "section", "team", "group", "network", "alliance", "coalition",
+    "council", "institute", "foundation", "society", "association",
+    "union", "voice", "media", "news", "press", "policy", "advocacy",
+    "membership", "registration", "certification", "accreditation",
+    "compliance", "training", "education", "learning", "development",
+    "support", "help", "contact", "about", "home", "main", "general",
+    "national", "state", "regional", "local", "chapter", "member",
+    "members", "consumer", "consumers",
+}
+
+
+def _looks_like_person_name(candidate: str) -> bool:
+    words = candidate.lower().split()
+    return not any(w in _NAME_DISQUALIFYING_WORDS for w in words)
 
 
 def smart_title(text: str) -> str:
@@ -268,7 +312,8 @@ def enrich_contact(domain: str, company_name: str, max_contacts: int = 1) -> dic
                 # anything overlapping the title span itself ("Certification
                 # Program" is two capitalized words too).
                 candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
-                                 if c.end(1) <= title_lo or c.start(1) >= title_hi]
+                                 if (c.end(1) <= title_lo or c.start(1) >= title_hi)
+                                 and _looks_like_person_name(c.group(1))]
                 if not candidates_nm:
                     continue
                 candidates_nm.sort(key=lambda x: min(abs(x.start(1) - title_hi),

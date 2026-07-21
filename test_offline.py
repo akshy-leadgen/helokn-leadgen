@@ -101,6 +101,14 @@ FIXTURES = [
         "link": "https://stateportal-lincoln.gov/health/ct-guidance",
         "snippet": "Clinical education in computed tomography requires "
                    "competency assessment per state guidance."}),
+
+    ("q_name_trap", "Certification Body", {
+        # v6 bug: nav/address text near a title match was extracted as a
+        # fake person's name ("Highland Avenue", "Certification Resources")
+        "title": "Board Certification Program",
+        "link": "https://trapboard-lincoln.org/certification",
+        "snippet": "Our certification exam and candidate handbook. "
+                   "Recertification requires continuing education credits."}),
 ]
 
 TEST_QUERY_BANK = [(q, hint) for q, hint, _ in FIXTURES]
@@ -190,6 +198,18 @@ PAGES = {
         <body>Clinical education in computed tomography requires competency
         assessment per state guidance. Find services from every state
         department here.</body></html>""",
+
+    # v6 bug: nav/address text near a title match, no real person present
+    "https://trapboard-lincoln.org": """
+        <html><head><title>Board of Trap Certification</title>
+        <meta property="og:site_name" content="Board of Trap Certification"></head>
+        <body>Our certification program offers a certification exam with
+        continuing education credits. Apply now.</body></html>""",
+    "https://trapboard-lincoln.org/contact": """
+        <html><body>Certification Resources: contact our Executive Director
+        for questions. Highland Avenue office.
+        <a href="mailto:general@trapboard-lincoln.org">general@trapboard-lincoln.org</a>
+        </body></html>""",
 }
 
 
@@ -355,6 +375,27 @@ def main():
     assert cred2["email_confidence"] == "high_verified_named"
     print("  [ok] v5: mailto-only email extracted; Executive Director matched "
           "as buyer title; no-reply & designer-credit emails ignored")
+
+    # ---- v6 audit-fix regression check: fake-name extraction ----
+    from enrich import _looks_like_person_name
+    v6_bad_names = ["Director Ron", "Highland Avenue", "Member Benefits",
+                    "Certification Resources", "Oregon Community",
+                    "Community Center", "Consumer Voice"]
+    assert all(not _looks_like_person_name(n) for n in v6_bad_names), \
+        "a real production fake-name failure is no longer blocked"
+    v6_real_names = ["Dana Whitfield", "Maria Sanchez", "John Mudd", "Cherise Lee"]
+    assert all(_looks_like_person_name(n) for n in v6_real_names), \
+        "a real name was wrongly blocked"
+
+    trap = by_dom.get("trapboard-lincoln.org")
+    assert trap is not None, "trap-fixture org missing"
+    assert trap["contact_name"] == "", \
+        f"fake name leaked through end-to-end: {trap['contact_name']!r}"
+    assert trap["contact_status"] == "Generic Email Only", trap["contact_status"]
+    assert trap["contact_email"] == "general@trapboard-lincoln.org"
+    print("  [ok] v6: 'Highland Avenue' / 'Certification Resources' style "
+          "fake names rejected end-to-end; falls through to honest "
+          "Generic Email Only instead of a fabricated named contact")
 
     for l in leads:
         print(f"  lead: {l['tier']} {l['score']:>3} {l['icp_category']:<38} "

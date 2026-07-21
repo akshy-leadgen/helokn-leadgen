@@ -59,9 +59,12 @@ HTTP_TIMEOUT = 10           # homepage validation fetches (accuracy matters)
 CONTACT_HTTP_TIMEOUT = 5    # contact-page fetches (speed matters; a miss
                             # here degrades one field, not the whole lead)
 HTTP_RETRIES = 1
-MAX_CONTACT_PAGES = 8       # max contact/about/team paths tried per company
-                            # (was unbounded at 17 — the dominant cost of a
-                            # 2-hour production run)
+MAX_CONTACT_PAGES = 12      # max contact/about/team paths tried per company
+                            # (raised from 8 for the final pre-Lovable pass:
+                            # quality now matters more than shaving minutes
+                            # off a batch run, and CONTACT_PATHS defines 17
+                            # candidate paths — 8 was leaving several
+                            # potentially useful ones untried)
 MAX_WORKERS = 10            # parallel threads for validate+enrich. The work
                             # is network-bound (waiting on other people's
                             # websites), so threads give a near-linear
