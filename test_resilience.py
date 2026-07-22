@@ -212,6 +212,38 @@ def test_deadline_enforcement_cuts_off_slow_work():
           f"completed {done_domains}, slow one correctly dropped\n")
 
 
+def test_collect_process_results_handles_none_entries():
+    """Direct regression test for a bug that reached production: a
+    results list with real (kind, payload) tuples MIXED WITH bare None
+    entries (candidates that never completed before a deadline) crashed
+    with 'TypeError: cannot unpack non-iterable NoneType object' — the
+    None-check was happening AFTER attempting to unpack, not before.
+    This tests the actual extracted function, not just the surrounding
+    threading pattern (which is what the previous deadline test did,
+    and why this bug weren't caught the first time)."""
+    print("TEST 6: collect_process_results survives a mix of real "
+          "results and None (incomplete-before-deadline) entries")
+    import run
+
+    results = [
+        ("lead", {"company_name": "Fast Co", "domain": "fast.org"}),
+        None,  # never completed before the deadline — the crash trigger
+        ("leads", [{"company_name": "School A", "domain": "school.org"},
+                  {"company_name": "School A", "domain": "school.org"}]),
+        None,
+        ("reject", {"domain": "bad.org", "rejection_reason": "no_trigger"}),
+    ]
+
+    leads, rejects = run.collect_process_results(results)  # must not raise
+
+    assert len(leads) == 3, f"expected 1 + 2 leads, got {len(leads)}"
+    assert leads[0]["domain"] == "fast.org"
+    assert {l["domain"] for l in leads[1:]} == {"school.org"}
+    assert len(rejects) == 1 and rejects[0]["domain"] == "bad.org"
+    print(f"  [ok] {len(leads)} leads + {len(rejects)} rejects collected "
+          f"correctly, None entries silently skipped, no crash\n")
+
+
 if __name__ == "__main__":
     import shutil
     shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
@@ -222,4 +254,5 @@ if __name__ == "__main__":
     test_gather_skips_failed_query_and_continues()
     test_export_survives_topup_crash()
     test_deadline_enforcement_cuts_off_slow_work()
+    test_collect_process_results_handles_none_entries()
     print("ALL RESILIENCE TESTS PASSED")

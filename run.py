@@ -33,6 +33,35 @@ from scorer import score_lead
 from exporter import write_leads, write_rejects, INDUSTRY_BY_ICP
 
 
+def collect_process_results(results):
+    """Splits a process()-style results list (one entry per submitted
+    candidate, in submission order) into (leads, rejects).
+
+    An entry is one of: ('lead', dict) | ('leads', list[dict]) |
+    ('reject', dict) | None. A bare None means that candidate's future
+    never completed before a deadline was reached — this MUST be checked
+    on the raw entry before attempting to unpack it as (kind, payload);
+    doing the None-check after unpacking (as an earlier version of this
+    function did) crashes immediately on the first incomplete entry,
+    since you cannot unpack a bare None into a 2-tuple. This exact bug
+    reached production once already — kept as a standalone function
+    specifically so it has a direct unit test, not just a test of the
+    surrounding threading pattern in isolation.
+    """
+    leads, rejects = [], []
+    for entry in results:
+        if entry is None:
+            continue  # never completed before the deadline was reached
+        kind, payload = entry
+        if kind == "lead":
+            leads.append(payload)
+        elif kind == "leads":
+            leads.extend(payload)
+        else:
+            rejects.append(payload)
+    return leads, rejects
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Helokn lead generation pipeline")
     p.add_argument("--full", action="store_true",
@@ -235,9 +264,8 @@ def main():
         False) on timeout: the default context-manager exit blocks until
         every submitted thread finishes regardless, which would silently
         defeat the entire point of having a deadline at all."""
-        leads = []
         if not cands:
-            return leads
+            return []
         done = 0
         results = [None] * len(cands)
         pool = ThreadPoolExecutor(max_workers=config.MAX_WORKERS)
@@ -264,16 +292,9 @@ def main():
             # wait=False: don't block the main thread on stragglers still
             # mid-request. cancel_futures drops anything not yet started.
             pool.shutdown(wait=False, cancel_futures=True)
-        for kind, payload in results:
-            if payload is None:
-                continue  # never completed before the deadline
-            if kind == "lead":
-                leads.append(payload)
-            elif kind == "leads":
-                leads.extend(payload)
-            else:
-                rejects.append(payload)
-        return leads
+        new_leads, new_rejects = collect_process_results(results)
+        rejects.extend(new_rejects)
+        return new_leads
 
     leads = process(candidates, deadline=run_deadline)
 
