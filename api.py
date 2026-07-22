@@ -45,6 +45,7 @@ IMPORTANT — free-tier idle spin-down (this bit us in production):
   an MVP-appropriate mitigation, documented as such.
 """
 
+import collections
 import os
 import secrets
 import subprocess
@@ -59,6 +60,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import supabase_export
+
+
+def _run_subprocess_with_capture(cmd, cwd, timeout_sec, tail_lines=50):
+    """Runs cmd, streaming its output live (Render's Logs tab still shows
+    real-time progress) while ALSO capturing the last N lines so a
+    failure can self-report the actual reason into Supabase — the
+    previous version just used subprocess.run(check=True), which on
+    failure only ever produced 'exit status 1' with no indication why,
+    forcing a manual trip into Render's logs every single time."""
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail = collections.deque(maxlen=tail_lines)
+
+    def _reader():
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            tail.append(line)
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+    try:
+        returncode = proc.wait(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        reader_thread.join(timeout=5)
+        raise RuntimeError(
+            f"run.py timed out after {timeout_sec}s. Last output:\n" + "".join(tail))
+    reader_thread.join(timeout=5)
+    if returncode != 0:
+        raise RuntimeError(
+            f"run.py exited with code {returncode}. Last output:\n" + "".join(tail))
 
 APP_DIR = Path(__file__).resolve().parent
 RUN_API_KEY = os.environ.get("RUN_API_KEY", "")
@@ -129,7 +162,7 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         # guarantee (covers the Serper query phase before the internal
         # clock starts, plus export overhead), not a guess at how long
         # the pipeline might take. 40 min total ceiling.
-        subprocess.run(cmd, check=True, cwd=APP_DIR, timeout=60 * 40)
+        _run_subprocess_with_capture(cmd, cwd=APP_DIR, timeout_sec=60 * 40)
 
         # run.py stamps output files with its own timestamp; find the
         # newest pair rather than assuming run_id matches to the minute.
@@ -143,7 +176,7 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         # instead of showing "running" forever.
         try:
             sb.table("pipeline_runs").update({
-                "status": "failed", "error_message": str(e)[:1000],
+                "status": "failed", "error_message": str(e)[:4000],
                 "finished_at": "now()",
             }).eq("run_id", run_id).execute()
         except Exception:
