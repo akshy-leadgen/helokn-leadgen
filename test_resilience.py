@@ -170,6 +170,48 @@ def test_export_survives_topup_crash():
         run.PRODUCTION_QUERY_COUNT = orig_prod_count
 
 
+def test_deadline_enforcement_cuts_off_slow_work():
+    """Proves a wall-clock deadline (as used by config.MAX_RUN_MINUTES)
+    actually cuts off slow work instead of blocking regardless: with a
+    tiny test deadline and one candidate that 'hangs' far longer than it,
+    the same ThreadPoolExecutor + as_completed(timeout=...) +
+    shutdown(wait=False) pattern process() uses must return promptly
+    with the fast candidates done and the slow one dropped."""
+    print("TEST 5: deadline pattern actually cuts off slow work "
+          "(the mechanism behind config.MAX_RUN_MINUTES)")
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FTE
+
+    def fake_process_one(domain):
+        if domain == "slow.org":
+            time.sleep(5)  # far longer than the test's 0.5s deadline
+        return domain
+
+    domains = ["fast1.org", "fast2.org", "slow.org"]
+    deadline = time.monotonic() + 0.5
+    pool = ThreadPoolExecutor(max_workers=10)
+    start = time.monotonic()
+    futures = {pool.submit(fake_process_one, d): d for d in domains}
+    done_domains = []
+    try:
+        for fut in as_completed(futures, timeout=max(0, deadline - time.monotonic())):
+            done_domains.append(fut.result())
+    except FTE:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, \
+        f"blocked for {elapsed:.1f}s — deadline did not cut off the slow thread"
+    assert "fast1.org" in done_domains and "fast2.org" in done_domains, \
+        f"fast candidates should have completed: {done_domains}"
+    assert "slow.org" not in done_domains, \
+        f"slow candidate should have been cut off, not waited for: {done_domains}"
+    print(f"  [ok] returned in {elapsed:.2f}s (not ~5s) — fast candidates "
+          f"completed {done_domains}, slow one correctly dropped\n")
+
+
 if __name__ == "__main__":
     import shutil
     shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
@@ -179,4 +221,5 @@ if __name__ == "__main__":
     test_permanent_failure_is_skippable()
     test_gather_skips_failed_query_and_continues()
     test_export_survives_topup_crash()
+    test_deadline_enforcement_cuts_off_slow_work()
     print("ALL RESILIENCE TESTS PASSED")

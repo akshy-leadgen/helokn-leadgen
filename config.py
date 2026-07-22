@@ -58,6 +58,14 @@ MAX_TEACHER_CONTACTS_PER_SCHOOL = 5  # up to N individual teacher emails per
                               # school, since "find teacher emails" means
                               # plural educators, not one org gatekeeper
 TARGET_LEADS = 100            # goal for a production run
+MAX_RUN_MINUTES = 25          # hard wall-clock budget for a --full run. This
+                              # is an ENFORCED stop, not a hope: once reached,
+                              # the pipeline stops starting new work and
+                              # exports whatever's completed so far, rather
+                              # than running indefinitely and relying on an
+                              # external process getting killed. Leaves a
+                              # 5-min margin under the "30 minutes at the
+                              # most" target.
 
 # Test mode (the default) processes exactly this much:
 TEST_MODE_QUERIES = 1
@@ -65,21 +73,34 @@ TEST_MODE_LEADS = 1
 
 # Network behavior for free (non-Serper) website fetches
 HTTP_TIMEOUT = 10           # homepage validation fetches (accuracy matters)
-CONTACT_HTTP_TIMEOUT = 5    # contact-page fetches (speed matters; a miss
-                            # here degrades one field, not the whole lead)
+CONTACT_HTTP_TIMEOUT = 4    # contact-page fetches (speed matters; a miss
+                            # here degrades one field, not the whole lead).
+                            # Lowered 5->4 as part of getting a full run
+                            # back under 30 min — most real pages that will
+                            # ever respond do so well under 4s; a slow-but-
+                            # real page beyond that is a rare trade worth
+                            # making for materially lower worst-case time
+                            # across hundreds of contact-page attempts.
 HTTP_RETRIES = 1
-MAX_CONTACT_PAGES = 16      # max contact/about/team/staff/faculty paths
-                            # tried per company. Raised again (12 -> 16) for
-                            # this final pass: the v6 audit found the hit
-                            # rate was still low mainly because several
-                            # genuinely useful defined paths (esp. the new
-                            # faculty/teacher ones) were never being reached
-                            # within the old cap. CONTACT_PATHS now defines
-                            # 21 candidates; 16 covers nearly all of them.
-MAX_WORKERS = 10            # parallel threads for validate+enrich. The work
-                            # is network-bound (waiting on other people's
-                            # websites), so threads give a near-linear
-                            # speedup: ~2h sequential -> ~10-15 min.
+MAX_CONTACT_PAGES = 12      # max contact/about/team/staff/faculty paths
+                            # tried per company. Brought back down from 16:
+                            # combined with K-12 leads now doing up to TWO
+                            # passes (teacher scan, then org-level fallback
+                            # if empty), 16 was a major contributor to runs
+                            # exceeding the 30-min target. 12 still covers
+                            # the highest-value paths (reordered earlier so
+                            # people/staff/faculty pages come first) while
+                            # meaningfully cutting worst-case time per company.
+MAX_WORKERS = 20            # parallel threads for validate+enrich. Raised
+                            # 10 -> 20: this work is network-bound (waiting
+                            # on other people's websites), so more threads
+                            # translate almost directly into wall-clock
+                            # speedup, not more load on any single site
+                            # (each thread hits a DIFFERENT company).
+                            # Combined with the MAX_RUN_MINUTES budget above,
+                            # this is what makes the 30-min target realistic
+                            # for the larger v7 query set instead of just
+                            # hoping the run finishes in time.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 HeloknLeadBot/1.0"

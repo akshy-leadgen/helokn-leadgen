@@ -19,7 +19,8 @@ happens BEFORE contact enrichment, so junk never gets enriched):
 
 import argparse
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 
 import config
@@ -123,6 +124,8 @@ def build_lead(cand, info, contact, s):
 def main():
     args = parse_args()
     production = args.full
+    run_deadline = (time.monotonic() + config.MAX_RUN_MINUTES * 60
+                    if production else None)
 
     print("=" * 64)
     if production:
@@ -224,24 +227,46 @@ def main():
                 "rejection_reason": "processing_error",
                 "explanation": f"{type(e).__name__}: {e}"})
 
-    def process(cands):
+    def process(cands, deadline=None):
+        """deadline is a time.monotonic() timestamp. If reached before all
+        candidates finish, stop WAITING for the rest and export whatever
+        completed — this is what makes MAX_RUN_MINUTES an enforced
+        guarantee rather than a hope. Critically uses pool.shutdown(wait=
+        False) on timeout: the default context-manager exit blocks until
+        every submitted thread finishes regardless, which would silently
+        defeat the entire point of having a deadline at all."""
         leads = []
         if not cands:
             return leads
         done = 0
-        with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
+        results = [None] * len(cands)
+        pool = ThreadPoolExecutor(max_workers=config.MAX_WORKERS)
+        try:
             futures = {pool.submit(process_one, c): idx
                        for idx, c in enumerate(cands)}
-            results = [None] * len(cands)
-            for fut in as_completed(futures):
-                idx = futures[fut]
-                results[idx] = fut.result()
-                done += 1
-                kind = results[idx][0]
-                extra = f" ({len(results[idx][1])})" if kind == "leads" else ""
-                print(f"[3/5] ({done}/{len(cands)}) {cands[idx].domain} "
-                      f"-> {kind}{extra}")
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            try:
+                for fut in as_completed(futures, timeout=remaining):
+                    idx = futures[fut]
+                    results[idx] = fut.result()
+                    done += 1
+                    kind = results[idx][0]
+                    extra = f" ({len(results[idx][1])})" if kind == "leads" else ""
+                    print(f"[3/5] ({done}/{len(cands)}) {cands[idx].domain} "
+                          f"-> {kind}{extra}")
+            except FuturesTimeoutError:
+                skipped = len(cands) - done
+                print(f"  ! Time budget reached ({config.MAX_RUN_MINUTES} min): "
+                      f"{done}/{len(cands)} companies finished, {skipped} still "
+                      f"in flight or not yet started — exporting what's done "
+                      f"now instead of waiting for the rest.")
+        finally:
+            # wait=False: don't block the main thread on stragglers still
+            # mid-request. cancel_futures drops anything not yet started.
+            pool.shutdown(wait=False, cancel_futures=True)
         for kind, payload in results:
+            if payload is None:
+                continue  # never completed before the deadline
             if kind == "lead":
                 leads.append(payload)
             elif kind == "leads":
@@ -250,7 +275,7 @@ def main():
                 rejects.append(payload)
         return leads
 
-    leads = process(candidates)
+    leads = process(candidates, deadline=run_deadline)
 
     # ---- Adaptive top-up: only in production, only within budget ----
     # Wrapped defensively: this is a "nice to have" pass to close the gap
@@ -258,8 +283,9 @@ def main():
     # error), we must still export the leads already validated above —
     # losing 89 good leads to a crash in an optional bonus step is a
     # correctness bug, not acceptable behavior.
+    time_left = run_deadline is None or time.monotonic() < run_deadline
     if production and len(leads) < args.target and client.remaining_budget() > 0 \
-            and len(QUERY_BANK) > primary:
+            and len(QUERY_BANK) > primary and time_left:
         print(f"\n[3.5/5] {len(leads)} < target {args.target}: "
               f"topping up from query bank ({client.remaining_budget()} calls left)")
         try:
@@ -267,12 +293,16 @@ def main():
             rejects.extend(extra_r)
             seen = {l["domain"] for l in leads}
             extra_c = [c for c in dedupe(extra_c) if c.domain not in seen]
-            leads.extend(process(extra_c))
+            leads.extend(process(extra_c, deadline=run_deadline))
         except Exception as e:
             print(f"  ! Top-up step failed ({type(e).__name__}: {e}). "
                   f"Exporting the {len(leads)} leads already gathered instead "
                   f"of losing them. Re-run --full afterward (cache means "
                   f"already-fetched queries/pages cost nothing extra).")
+    elif production and not time_left:
+        print(f"\n[3.5/5] Time budget ({config.MAX_RUN_MINUTES} min) already "
+              f"reached after the primary pass — skipping top-up, exporting "
+              f"{len(leads)} leads now.")
 
     # ---- Export (always runs, regardless of what happened above) ----
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M")

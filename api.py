@@ -123,7 +123,13 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         }).execute()
 
         cmd = ["python", "-u", "run.py"] + (["--full"] if mode == "full" else [])
-        subprocess.run(cmd, check=True, cwd=APP_DIR, timeout=60 * 45)
+        # run.py now enforces its OWN wall-clock budget internally
+        # (config.MAX_RUN_MINUTES, 25 min) and exports whatever's done
+        # by then — this external timeout is a safety margin ABOVE that
+        # guarantee (covers the Serper query phase before the internal
+        # clock starts, plus export overhead), not a guess at how long
+        # the pipeline might take. 40 min total ceiling.
+        subprocess.run(cmd, check=True, cwd=APP_DIR, timeout=60 * 40)
 
         # run.py stamps output files with its own timestamp; find the
         # newest pair rather than assuming run_id matches to the minute.
