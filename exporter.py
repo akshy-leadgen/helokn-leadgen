@@ -40,6 +40,7 @@ INDUSTRY_BY_ICP = {
     "Safety Training Organization": "Safety & EHS",
     "Education Organization (Assessments)": "Education & Training",
     "Structured Onboarding / Training Program": "Corporate Learning & Development",
+    "K-12 Education (Teachers)": "K-12 Education",
 }
 
 

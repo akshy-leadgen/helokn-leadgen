@@ -27,7 +27,7 @@ from queries import QUERY_BANK, PRODUCTION_QUERY_COUNT
 from serper_client import SerperClient, BudgetExhausted, SerperRequestFailed
 from junkfilter import filter_result
 from companyclean import resolve_company
-from enrich import enrich_contact
+from enrich import enrich_contact, enrich_teacher_contacts
 from scorer import score_lead
 from exporter import write_leads, write_rejects, INDUSTRY_BY_ICP
 
@@ -42,6 +42,11 @@ def parse_args():
                    help=f"results per query (default {config.MAX_RESULTS_PER_QUERY})")
     p.add_argument("--max-contacts", type=int, default=config.MAX_CONTACTS_PER_COMPANY,
                    help="contacts per company (default 1)")
+    p.add_argument("--max-teacher-contacts", type=int,
+                   default=config.MAX_TEACHER_CONTACTS_PER_SCHOOL,
+                   help="max individual teacher contacts per school for "
+                        f"K-12 Education (Teachers) leads (default "
+                        f"{config.MAX_TEACHER_CONTACTS_PER_SCHOOL})")
     p.add_argument("--target", type=int, default=config.TARGET_LEADS,
                    help=f"qualified-lead target (default {config.TARGET_LEADS})")
     return p.parse_args()
@@ -152,7 +157,15 @@ def main():
     # speedup. Results are collected per-candidate and merged in input
     # order afterward so output stays deterministic.
     def process_one(cand):
-        """Returns ('lead', dict) | ('reject', dict)."""
+        """Returns ('lead', dict) | ('leads', list[dict]) | ('reject', dict).
+
+        K-12 Education (Teachers) leads are the one case that can return
+        MULTIPLE leads from a single candidate: "find teacher emails"
+        means plural front-line staff at a school, not one gatekeeper
+        contact. Score/tier/evidence are computed once per school (they
+        don't vary by which specific teacher we found) and shared across
+        every resulting row — only the contact fields differ row to row.
+        """
         try:
             info = resolve_company(cand)
             if not info["valid"]:
@@ -161,6 +174,33 @@ def main():
                     "domain": cand.domain, "source_query": cand.source_query,
                     "rejection_reason": info["rejection_reason"],
                     "explanation": info["explanation"]})
+
+            is_teacher_icp = cand.icp_hint == "K-12 Education (Teachers)"
+            teacher_contacts = []
+            if is_teacher_icp:
+                teacher_contacts, _ = enrich_teacher_contacts(
+                    cand.domain, info["company_name"], args.max_teacher_contacts)
+
+            if teacher_contacts:
+                # Score once using the first teacher as representative —
+                # ICP/trigger/evidence/validity are shared across every row
+                # for this school; only the contact points would ever
+                # differ, and every teacher_contacts entry has status
+                # "Named Buyer Email" by construction (see enrich.py), so
+                # they all score identically anyway.
+                s = score_lead(cand, info, teacher_contacts[0])
+                if s["tier"] == "Rejected":
+                    return ("reject", {
+                        "raw_title": cand.raw_title, "raw_url": cand.raw_url,
+                        "domain": cand.domain, "source_query": cand.source_query,
+                        "rejection_reason": "failed_scoring",
+                        "explanation": f"Score {s['score']} < 50. {s['audit_trail']}"})
+                return ("leads", [build_lead(cand, info, tc, s) for tc in teacher_contacts])
+
+            # Fallback path — covers non-teacher-ICP leads normally, AND
+            # covers a K-12 school where no individual teacher email was
+            # found (falls back to a principal/admin contact instead of
+            # producing nothing for that school at all).
             contact = enrich_contact(cand.domain, info["company_name"],
                                      args.max_contacts)
             s = score_lead(cand, info, contact)
@@ -198,14 +238,16 @@ def main():
                 results[idx] = fut.result()
                 done += 1
                 kind = results[idx][0]
+                extra = f" ({len(results[idx][1])})" if kind == "leads" else ""
                 print(f"[3/5] ({done}/{len(cands)}) {cands[idx].domain} "
-                      f"-> {kind}")
+                      f"-> {kind}{extra}")
         for kind, payload in results:
             if kind == "lead":
                 leads.append(payload)
+            elif kind == "leads":
+                leads.extend(payload)
             else:
                 rejects.append(payload)
-        return leads
         return leads
 
     leads = process(candidates)

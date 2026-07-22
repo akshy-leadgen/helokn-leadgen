@@ -109,6 +109,35 @@ FIXTURES = [
         "link": "https://trapboard-lincoln.org/certification",
         "snippet": "Our certification exam and candidate handbook. "
                    "Recertification requires continuing education credits."}),
+
+    ("q_teachers_found", "K-12 Education (Teachers)", {
+        # v7: new feature — school with multiple findable teacher emails
+        "title": "Meet Our Teachers | Lincoln Elementary School",
+        "link": "https://lincolnelementary-lincoln.org/staff",
+        "snippet": "Meet our teachers at Lincoln Elementary. Our staff "
+                   "directory includes contact information for every "
+                   "classroom teacher."}),
+
+    ("q_teachers_fallback", "K-12 Education (Teachers)", {
+        # v7: school with NO individual teacher emails published — must
+        # fall back to a standard org-level contact (principal), not
+        # produce zero output for the school
+        "title": "Our Faculty | Lincoln Middle School",
+        "link": "https://lincolnmiddle-lincoln.org/faculty",
+        "snippet": "Our faculty at Lincoln Middle School are dedicated "
+                   "educators focused on differentiated instruction and "
+                   "student assessment."}),
+
+    ("q_bare_name_email", "Certification Body", {
+        # v7 hit-rate fix: a small org's informal "Our Team" page lists
+        # just "Name — email", no job title at all. Previously discarded
+        # entirely (title-based search finds nothing -> falls through to
+        # role/generic/nothing). Must now be picked up as a genuine,
+        # honestly-labeled named contact.
+        "title": "Small Org Certification Program",
+        "link": "https://smallorg-lincoln.org/certification",
+        "snippet": "Our certification exam and candidate handbook. "
+                   "Continuing education credits required for renewal."}),
 ]
 
 TEST_QUERY_BANK = [(q, hint) for q, hint, _ in FIXTURES]
@@ -210,6 +239,56 @@ PAGES = {
         for questions. Highland Avenue office.
         <a href="mailto:general@trapboard-lincoln.org">general@trapboard-lincoln.org</a>
         </body></html>""",
+
+    # v7: school WITH multiple findable teacher emails
+    "https://lincolnelementary-lincoln.org": """
+        <html><head><title>Lincoln Elementary School</title>
+        <meta property="og:site_name" content="Lincoln Elementary School"></head>
+        <body>Meet our teachers. Our classroom teachers focus on
+        differentiated instruction and lesson plans for every student.
+        </body></html>""",
+    "https://lincolnelementary-lincoln.org/staff": """
+        <html><body>
+        <p>Sarah Chen, 3rd Grade Teacher —
+        <a href="mailto:schen@lincolnelementary-lincoln.org">email</a></p>
+        <p>Marcus Bell, Math Teacher —
+        <a href="mailto:mbell@lincolnelementary-lincoln.org">email</a></p>
+        <p>Every teacher at our school is dedicated. (no email here, prose only)</p>
+        <p>Principal Diane Ford —
+        <a href="mailto:dford@lincolnelementary-lincoln.org">email</a></p>
+        </body></html>""",
+    # a second page listing Sarah Chen again — must NOT produce a duplicate row
+    "https://lincolnelementary-lincoln.org/faculty": """
+        <html><body>
+        <p>Sarah Chen, 3rd Grade Teacher —
+        <a href="mailto:schen@lincolnelementary-lincoln.org">email</a></p>
+        </body></html>""",
+
+    # v7: school with NO individual teacher emails — must fall back to
+    # the standard org-level contact (Principal) instead of zero output
+    "https://lincolnmiddle-lincoln.org": """
+        <html><head><title>Lincoln Middle School</title>
+        <meta property="og:site_name" content="Lincoln Middle School"></head>
+        <body>Our faculty are dedicated educators focused on
+        differentiated instruction and student assessment.</body></html>""",
+    "https://lincolnmiddle-lincoln.org/faculty": """
+        <html><body>Our faculty are wonderful educators and teachers who
+        care deeply about every student. (no names, no emails on this page)
+        </body></html>""",
+    "https://lincolnmiddle-lincoln.org/contact": """
+        <html><body>Principal Robert Kim —
+        <a href="mailto:rkim@lincolnmiddle-lincoln.org">email</a></body></html>""",
+
+    # v7 hit-rate fix: name + email, deliberately NO job title anywhere
+    "https://smallorg-lincoln.org": """
+        <html><head><title>Small Org Certification Board</title>
+        <meta property="og:site_name" content="Small Org Certification Board"></head>
+        <body>Our certification exam and candidate handbook. Continuing
+        education credits required for renewal.</body></html>""",
+    "https://smallorg-lincoln.org/contact": """
+        <html><body>Our Team: Priya Nair —
+        <a href="mailto:pnair@smallorg-lincoln.org">pnair@smallorg-lincoln.org</a>.
+        Reach out anytime with questions about certification!</body></html>""",
 }
 
 
@@ -396,6 +475,53 @@ def main():
     print("  [ok] v6: 'Highland Avenue' / 'Certification Resources' style "
           "fake names rejected end-to-end; falls through to honest "
           "Generic Email Only instead of a fabricated named contact")
+
+    # ---- v7 feature checks: K-12 / teacher email discovery ----
+    elem_rows = [l for l in leads if l["domain"] == "lincolnelementary-lincoln.org"]
+    assert len(elem_rows) == 2, \
+        f"expected 2 teacher rows (Sarah Chen, Marcus Bell), got {len(elem_rows)}: " \
+        f"{[r['contact_name'] for r in elem_rows]}"
+    names = {r["contact_name"] for r in elem_rows}
+    assert names == {"Sarah Chen", "Marcus Bell"}, \
+        f"wrong teachers extracted: {names} (Principal Diane Ford must be " \
+        f"excluded — not a teacher title; no duplicate Sarah Chen from the " \
+        f"second page that repeats her)"
+    for r in elem_rows:
+        assert r["contact_status"] == "Named Buyer Email"
+        assert r["icp_category"] == "K-12 Education (Teachers)"
+        assert r["company_name"] == "Lincoln Elementary School"
+        assert r["contact_email"].endswith("@lincolnelementary-lincoln.org")
+    titles = {r["contact_name"]: r["contact_title"] for r in elem_rows}
+    assert titles["Sarah Chen"] == "3Rd Grade Teacher" or titles["Sarah Chen"] == "3rd Grade Teacher", \
+        titles["Sarah Chen"]  # smart_title capitalizes each word; "3rd" has no letters to re-case oddly
+    assert titles["Marcus Bell"] == "Math Teacher", titles["Marcus Bell"]
+    print(f"  [ok] v7: multi-teacher extraction — 2 distinct teachers found, "
+          f"Principal excluded, cross-page duplicate correctly deduped, "
+          f"titles: {titles}")
+
+    mid_rows = [l for l in leads if l["domain"] == "lincolnmiddle-lincoln.org"]
+    assert len(mid_rows) == 1, \
+        f"school with no teacher emails should fall back to exactly 1 " \
+        f"org-level contact row, got {len(mid_rows)}"
+    assert mid_rows[0]["contact_name"] == "Robert Kim", mid_rows[0]["contact_name"]
+    assert mid_rows[0]["contact_title"] == "Principal", mid_rows[0]["contact_title"]
+    assert mid_rows[0]["icp_category"] == "K-12 Education (Teachers)"
+    print(f"  [ok] v7: school with zero teacher emails correctly falls back "
+          f"to org-level contact ({mid_rows[0]['contact_name']}, "
+          f"{mid_rows[0]['contact_title']}) instead of producing nothing")
+
+    small = by_dom.get("smallorg-lincoln.org")
+    assert small is not None, "bare-name-email org missing"
+    assert small["contact_name"] == "Priya Nair", small["contact_name"]
+    assert small["contact_email"] == "pnair@smallorg-lincoln.org"
+    assert small["contact_title"] == "", \
+        f"title should be honestly empty (none was found), got {small['contact_title']!r}"
+    assert small["contact_status"] == "Named Buyer Email", small["contact_status"]
+    assert small["email_confidence"] == "medium_likely_named", \
+        "no title confirmation -> capped at medium, not high"
+    print("  [ok] v7 hit-rate fix: name+email with NO job title nearby is "
+          "now captured (previously discarded entirely), honestly labeled "
+          "with an empty title and capped confidence")
 
     for l in leads:
         print(f"  lead: {l['tier']} {l['score']:>3} {l['icp_category']:<38} "

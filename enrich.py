@@ -32,8 +32,13 @@ from junkfilter import root_domain
 # only ever see the FIRST few paths, so pages where named people appear
 # (team/leadership/staff) must come before secondary contact pages. The
 # v4 audit showed named-contact yield collapse to zero when these sat at
-# positions 6-8, behind an early-stop at position 5.
+# positions 6-8, behind an early-stop at position 5. v7: added faculty/
+# teacher-directory paths (schools rarely use "/team" but very commonly
+# use "/faculty" or "/staff-directory") right after /staff, for the same
+# reason — and general hit-rate: these paths help non-school leads too
+# wherever an org calls its people page something other than "/team".
 CONTACT_PATHS = ["/contact", "/about", "/team", "/leadership", "/staff",
+                 "/faculty", "/faculty-directory", "/teachers", "/our-staff",
                  "/our-team", "/about-us", "/contact-us",
                  "/staff-directory", "/directory", "/board-and-staff",
                  "/who-we-are", "/about/leadership", "/about/staff",
@@ -104,8 +109,35 @@ PRIORITY_TITLES = [
     "credentialing specialist", "certification specialist",
     "certification manager", "education manager", "training manager",
     "program director", "executive director",
+    # school-admin titles (org-level fallback contact when no individual
+    # teacher is found — the actual purchase decision for a K-12 tool
+    # often sits with these roles even though teachers are the end users)
+    "principal", "assistant principal", "vice principal",
+    "curriculum director", "instructional coach",
+    "director of curriculum and instruction", "edtech coordinator",
+    "director of technology", "superintendent",
 ]
 TITLE_RE = re.compile("|".join(re.escape(t) for t in PRIORITY_TITLES), re.I)
+
+# Individual-educator titles — deliberately SEPARATE from PRIORITY_TITLES
+# above (org-level gatekeepers). Used only by enrich_teacher_contacts()
+# for the "find teacher emails" (plural, front-line staff) feature.
+# Grade/subject vocabulary is explicit (not "any word + teacher") so the
+# extracted title doesn't swallow filler words like "Our"/"And" from the
+# surrounding sentence — a bare "Teacher" with no prefix still matches
+# fine since both prefix groups are optional.
+_GRADE_WORDS = (r"pre-?k|kindergarten|\d{1,2}(?:st|nd|rd|th)?\s*grade|"
+               r"elementary|middle school|high school|primary|secondary")
+_SUBJECT_WORDS = (r"math(?:ematics)?|science|english|language arts|ela|"
+                  r"history|social studies|\bart\b|music|"
+                  r"physical education|\bpe\b|special education|\bsped\b|"
+                  r"\besl\b|\bell\b|reading|spanish|french|technology|"
+                  r"computer science|health")
+TEACHER_TITLE_RE = re.compile(
+    rf"\b(?:(?:{_GRADE_WORDS})\s+)?(?:(?:{_SUBJECT_WORDS})\s+)?"
+    rf"(?:classroom\s+|lead\s+)?teachers?\b|"
+    r"\binstructors?\b|\beducators?\b|\bteaching assistants?\b", re.I)
+
 NAME_RE = re.compile(r"\b([A-Z][a-z]+(?: [A-Z]\.)? [A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b")
 # Overlapping variant (lookahead): in text like "WebDesign Studio Dana
 # Whitfield, Executive Director", non-overlapping matching consumes
@@ -147,6 +179,13 @@ _NAME_DISQUALIFYING_WORDS = {
     "support", "help", "contact", "about", "home", "main", "general",
     "national", "state", "regional", "local", "chapter", "member",
     "members", "consumer", "consumers",
+    # school-context nav/section words (same failure pattern as
+    # "Highland Avenue" etc., now on school sites: "Elementary School",
+    # "Faculty Directory", "Classroom News" read as if two-word names)
+    "elementary", "middle", "high", "school", "schools", "classroom",
+    "classrooms", "faculty", "homeroom", "district", "campus",
+    "students", "student", "parents", "parent", "grades", "grade",
+    "kindergarten", "preschool", "academics", "curriculum",
 }
 
 
@@ -252,6 +291,74 @@ def _email_matches_name(email: str, name: str) -> bool:
     return local in forms or last in local
 
 
+def _find_all_named_contacts(text: str, emails: list[str],
+                             title_re: re.Pattern) -> list[tuple[str, str, str]]:
+    """Every (name, smart-cased title, matched email or '') found in text
+    for the given title regex — one entry per title occurrence, in
+    document order, not stopping at the first. Shared building block for
+    both enrich_contact's single-best-contact search and
+    enrich_teacher_contacts' collect-everything search."""
+    results = []
+    for m in title_re.finditer(text):
+        window = text[max(0, m.start() - 120): m.end() + 120]
+        offset = max(0, m.start() - 120)
+        title_lo, title_hi = m.start() - offset, m.end() - offset
+        # Overlapping candidates (see NAME_RE_OVERLAP note above), minus
+        # anything overlapping the title span itself ("Certification
+        # Program" is two capitalized words too).
+        candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
+                         if (c.end(1) <= title_lo or c.start(1) >= title_hi)
+                         and _looks_like_person_name(c.group(1))]
+        if not candidates_nm:
+            continue
+        candidates_nm.sort(key=lambda x: min(abs(x.start(1) - title_hi),
+                                             abs(title_lo - x.end(1))))
+        # Prefer the candidate whose email exists on this page — strongest
+        # possible person<->email linkage; fall back to nearest name.
+        nm, email = candidates_nm[0], ""
+        for c in candidates_nm:
+            e = next((e for e in emails if _email_matches_name(e, c.group(1))), "")
+            if e:
+                nm, email = c, e
+                break
+        results.append((nm.group(1), smart_title(m.group(0)), email))
+    return results
+
+
+def _find_bare_name_email_pairs(text: str, emails: list[str]) -> list[tuple[str, str]]:
+    """Catches the common case a title-based search misses entirely: a
+    small org's informal 'Our Team' page listing just 'Jane Smith —
+    jsmith@org.com' with no job title at all. Only called on pages
+    already in CONTACT_PATHS (i.e. already trusted to be about people,
+    not random content), and requires an individually-shaped email
+    (classify_email == 'named') within a TIGHT window of the name — a
+    smaller window than the title-search uses, since there's no title
+    keyword here to anchor the proximity check, so caution matters more.
+    Returns (name, email) pairs, empty title (honestly, since none was
+    found — see enrich_contact's email_confidence choice for this path).
+    """
+    results = []
+    for e in emails:
+        if classify_email(e) != "named":
+            continue
+        idx = text.lower().find(e.lower())
+        if idx == -1:
+            continue
+        window = text[max(0, idx - 40): idx + len(e) + 40]
+        offset = max(0, idx - 40)
+        e_lo, e_hi = idx - offset, idx - offset + len(e)
+        candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
+                         if (c.end(1) <= e_lo or c.start(1) >= e_hi)
+                         and _looks_like_person_name(c.group(1))]
+        if not candidates_nm:
+            continue
+        candidates_nm.sort(key=lambda x: min(abs(x.start(1) - e_hi), abs(e_lo - x.end(1))))
+        nm = candidates_nm[0]
+        if _email_matches_name(e, nm.group(1)):
+            results.append((nm.group(1), e))
+    return results
+
+
 def search_urls(company_name: str):
     li = ("https://www.linkedin.com/search/results/people/?keywords="
           + quote_plus(f'{company_name} "learning and development" OR '
@@ -304,34 +411,22 @@ def enrich_contact(domain: str, company_name: str, max_contacts: int = 1) -> dic
         # Manager" and "Training Manager: Jane Smith") so search a
         # window on both sides of the title match, not just after it.
         if not named_hit:
-            for m in TITLE_RE.finditer(text):
-                window = text[max(0, m.start() - 120): m.end() + 120]
-                offset = max(0, m.start() - 120)
-                title_lo, title_hi = m.start() - offset, m.end() - offset
-                # Overlapping candidates (see NAME_RE_OVERLAP note), minus
-                # anything overlapping the title span itself ("Certification
-                # Program" is two capitalized words too).
-                candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
-                                 if (c.end(1) <= title_lo or c.start(1) >= title_hi)
-                                 and _looks_like_person_name(c.group(1))]
-                if not candidates_nm:
-                    continue
-                candidates_nm.sort(key=lambda x: min(abs(x.start(1) - title_hi),
-                                                     abs(title_lo - x.end(1))))
-                # Prefer the candidate whose email exists on this page —
-                # strongest possible person<->email linkage; fall back to
-                # the nearest name to the title.
-                nm, email = candidates_nm[0], ""
-                for c in candidates_nm:
-                    e = next((e for e in emails
-                              if _email_matches_name(e, c.group(1))), "")
-                    if e:
-                        nm, email = c, e
-                        break
-                name, title = nm.group(1), smart_title(m.group(0))
+            for name, title, email in _find_all_named_contacts(text, emails, TITLE_RE):
                 named_hit = (name, title, email, url)
                 if email:
                     break
+
+        # 1.5) no title match on this page at all? Common on small orgs'
+        # informal "Our Team" pages that just list "Jane Smith —
+        # jsmith@org.com" with no job title. Title-based search above
+        # finds nothing in that case; without this, the email is simply
+        # discarded — a real, avoidable contributor to low hit rate.
+        # Confidence capped at medium (not high) since there's no title
+        # confirming this person is actually in a relevant role.
+        if not (named_hit and named_hit[2]):
+            for name, email in _find_bare_name_email_pairs(text, emails):
+                named_hit = (name, "", email, url)
+                break
 
         # 2) role / generic inboxes as fallback
         for e in emails:
@@ -350,11 +445,16 @@ def enrich_contact(domain: str, company_name: str, max_contacts: int = 1) -> dic
         base.update(contact_name=name, contact_title=title,
                     contact_source_url=src)
         if email:
-            base.update(contact_email=email,
-                        contact_status="Named Buyer Email",
-                        email_confidence="high_verified_named"
-                        if _email_matches_name(email, name)
-                        else "medium_likely_named")
+            # high_verified_named requires BOTH a matching email format AND
+            # a confirmed buyer title — a title-less match (the bare-name-
+            # email fallback above) can be just as sure the ADDRESS is
+            # correct, but has no confirmation this person is in a
+            # relevant role at all, so it's honestly capped at medium.
+            confidence = ("high_verified_named"
+                         if title and _email_matches_name(email, name)
+                         else "medium_likely_named")
+            base.update(contact_email=email, contact_status="Named Buyer Email",
+                        email_confidence=confidence)
             return base
         if role_email:
             base.update(contact_email=role_email[0],
@@ -383,3 +483,69 @@ def enrich_contact(domain: str, company_name: str, max_contacts: int = 1) -> dic
                 else "No Contact Found",
                 email_confidence="none")
     return base
+
+
+def enrich_teacher_contacts(domain: str, company_name: str,
+                            max_contacts: int = 5) -> tuple[list[dict], int]:
+    """Find UP TO max_contacts individual teacher/educator contacts for a
+    school. Unlike enrich_contact (one best org-level gatekeeper), 'find
+    teacher emails' means plural front-line staff, not one administrator
+    — so this collects as many as it can, deduped, instead of stopping
+    at the first.
+
+    Conservative by design: a match is only kept if it has an ACTUAL
+    matched email next to it. TEACHER_TITLE_RE is deliberately loose
+    (a bare "Teacher" can match ordinary prose, e.g. "every teacher at
+    our school..."), so requiring a real matched email is what keeps a
+    stray marketing-copy mention from becoming a fabricated contact row
+    — the same lesson as the v6 fake-name audit, applied here up front
+    rather than after the fact.
+
+    Returns (contacts, pages_tried) — contacts is a list of dicts each
+    shaped like enrich_contact's return value, one per teacher found.
+    """
+    li_url, gg_url = search_urls(company_name)
+    found: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
+    pages_tried = 0
+
+    for path in CONTACT_PATHS:
+        if len(found) >= max_contacts:
+            break
+        if len(found) >= max(1, config.MAX_CONTACT_PAGES // 3) and pages_tried >= 4:
+            # Modest early-stop once we already have a reasonable haul and
+            # have tried several pages — avoids burning the full page
+            # budget on a school that's clearly already yielded results,
+            # leaving more budget for schools that haven't yielded any yet.
+            break
+        url = urljoin(f"https://{domain}", path)
+        html = fetch_page(url, timeout=config.CONTACT_HTTP_TIMEOUT)
+        if not html:
+            continue
+        pages_tried += 1
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text(" ", strip=True)
+        emails = extract_emails(html, soup, domain)
+
+        for name, title, email in _find_all_named_contacts(text, emails, TEACHER_TITLE_RE):
+            if not email:
+                continue    # see docstring: no email, no row — too noisy otherwise
+            key = (name.lower(), email.lower())
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            found.append({
+                "contact_name": name,
+                "contact_title": title,
+                "contact_email": email,
+                "email_confidence": "high_verified_named"
+                    if _email_matches_name(email, name) else "medium_likely_named",
+                "contact_status": "Named Buyer Email",
+                "contact_source_url": url,
+                "linkedin_search_url": li_url,
+                "google_search_url": gg_url,
+            })
+            if len(found) >= max_contacts:
+                break
+
+    return found, pages_tried

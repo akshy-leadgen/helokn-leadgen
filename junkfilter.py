@@ -199,6 +199,16 @@ STRONG_TRIGGERS = {
     "assessment rubric": r"assessment rubric|scoring rubric",
     "exams / knowledge checks": r"knowledge checks?|final exam|practice exam|exam prep",
     "accredited provider": r"accredited provider|approved provider|accreditation statement",
+    # K-12 / teacher discovery triggers (Helokn's "AI Assistant Teacher"
+    # positioning). Kept as distinct trigger names from the adjacent
+    # "skills validation"/"competency assessment" triggers above even
+    # though conceptually related, since scoring keys off the trigger
+    # name string and this ICP needs its own signal.
+    "classroom teacher": r"classroom teachers?|our teachers|meet our teachers|faculty directory|staff directory",
+    "teacher professional development": r"teacher professional development|pd for teachers|professional development (day|credits) for (teachers|staff|faculty)",
+    "differentiated instruction": r"differentiated instruction|individualized learning plan|student-centered learning",
+    "lesson planning": r"lesson plans?|lesson planning|curriculum support|instructional coach",
+    "student assessment tools": r"student assessment|formative assessment|grading tools?|edtech (tool|platform) for teachers",
 }
 STRONG_TRIGGER_RES = {k: re.compile(v, re.I) for k, v in STRONG_TRIGGERS.items()}
 

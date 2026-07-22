@@ -89,6 +89,35 @@ QUERY_BANK = [
     ('"annual compliance training" "all employees" "our organization" complete', "Compliance Training Organization"),
     ('financial institution "compliance training" "our staff" annual required', "Compliance Training Organization"),
 
+    # ================= K-12 / teacher discovery =================
+    # Added for Helokn's "AI Assistant Teacher" positioning. Placed here
+    # (inside the guaranteed primary set, not appended to the tail) on
+    # purpose — a top-up-only query only runs if an earlier shortfall
+    # triggers deep top-up, which under default budget settings would
+    # rarely or never reach queries this far down the bank. Teacher
+    # discovery is a first-class feature, not a fallback.
+    #
+    # These are deliberately aimed at pages that PUBLISH a staff/faculty
+    # directory (where individual teacher emails actually live), not just
+    # any page that mentions teachers — "our teachers", "faculty
+    # directory", and "staff directory" are the phrases that distinguish
+    # a real directory page from an article or news mention about schools
+    # in general.
+    ('"meet our teachers" elementary OR middle OR high school', "K-12 Education (Teachers)"),
+    ('"faculty directory" teachers school "email"', "K-12 Education (Teachers)"),
+    ('"staff directory" "grade" teacher school contact', "K-12 Education (Teachers)"),
+    ('"our teachers" school "classroom" contact', "K-12 Education (Teachers)"),
+    ('"our faculty" "elementary school" OR "middle school" OR "high school" directory', "K-12 Education (Teachers)"),
+    ('school district "staff directory" "teacher" contact email', "K-12 Education (Teachers)"),
+    ('"private school" OR "charter school" "our faculty" teachers directory', "K-12 Education (Teachers)"),
+    ('"teacher professional development" district "our teachers"', "K-12 Education (Teachers)"),
+    ('"instructional coach" OR "curriculum director" school "our team"', "K-12 Education (Teachers)"),
+    ('"AI in the classroom" OR "edtech" teacher "our teachers" school', "K-12 Education (Teachers)"),
+    ('"differentiated instruction" "our teachers" classroom school', "K-12 Education (Teachers)"),
+    ('"lesson plans" teacher "our staff" school contact', "K-12 Education (Teachers)"),
+    ('elementary school "our staff" "grade teacher" contact', "K-12 Education (Teachers)"),
+    ('middle school OR high school "department" "our teachers" faculty', "K-12 Education (Teachers)"),
+
     # ================= Workforce development =================
     ('"workforce development" board "training programs" "our services"', "Workforce Development Organization"),
     ('"apprenticeship program" "skills assessment" apply sponsor', "Workforce Development Organization"),
@@ -155,4 +184,7 @@ QUERY_BANK = [
     ('"interpreter" OR "translator" "certification" "our exam" credential apply', "Certification Body"),
 ]
 
-PRODUCTION_QUERY_COUNT = 45  # first N entries form the standard production run
+PRODUCTION_QUERY_COUNT = 59  # first N entries form the standard production run
+                             # (45 -> 59: extended to guarantee the 14 K-12/
+                             # teacher discovery queries always run, not just
+                             # when a shortfall happens to trigger deep top-up)

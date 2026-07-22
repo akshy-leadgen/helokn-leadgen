@@ -40,6 +40,9 @@ ICP_KEYWORDS = {
     "Education Organization (Assessments)": ["assessment rubric", "exams / knowledge checks",
                                               "skills validation", "competency assessment"],
     "Structured Onboarding / Training Program": ["employee onboarding", "staff training program"],
+    "K-12 Education (Teachers)": ["classroom teacher", "teacher professional development",
+                                  "differentiated instruction", "lesson planning",
+                                  "student assessment tools"],
 }
 
 CONTACT_POINTS = {
