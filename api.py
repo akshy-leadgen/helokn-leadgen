@@ -104,7 +104,7 @@ app = FastAPI(title="Helokn Lead Gen API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https://.*\.lovable\.app|http://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=r"https://.*\.lovable\.app|https://.*\.replit\.app|http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
