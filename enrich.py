@@ -145,6 +145,38 @@ NAME_RE = re.compile(r"\b([A-Z][a-z]+(?: [A-Z]\.)? [A-Z][a-z]+(?:-[A-Z][a-z]+)?)
 NAME_RE_OVERLAP = re.compile(
     r"(?=\b([A-Z][a-z]+(?: [A-Z]\.)? [A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b)")
 
+# "Last, First" format — staff directories are very commonly sorted
+# alphabetically by last name and rendered exactly this way ("Mora,
+# Sara"), confirmed from real production evidence where a school's
+# staff directory clearly listed teachers this way and NONE were ever
+# found, because NAME_RE/NAME_RE_OVERLAP only ever matched the "First
+# Last" (space-separated) shape. This was very likely the single
+# biggest reason teacher-email yield was near zero, more than any
+# blocklist gap.
+#
+# The negative lookahead (?!\s[A-Z]) matters: without it, the extremely
+# common "Name, Job Title" convention ("Marcus Bell, Math Teacher")
+# is structurally identical to "Last, First" and gets misread as a
+# person named "Math Bell" — found via a real regression during testing.
+# Requiring the "first name" part NOT be followed by another capitalized
+# word rules out "JobTitle ContinuesHere" while still matching a real
+# "Mora, Sara." (followed by a period, not another capitalized word).
+_LASTFIRST_RE = re.compile(r"\b([A-Z][a-z]+(?:-[A-Z][a-z]+)?), ([A-Z][a-z]+)\b(?!\s[A-Z])")
+
+
+def _gather_name_candidates(window: str) -> list[tuple[str, int, int]]:
+    """Every plausible person-name span in window, from BOTH supported
+    formats, normalized to a single (display_name, start, end) shape so
+    callers don't need to know which pattern matched. Display name is
+    always 'First Last' order, even when the source text was 'Last,
+    First' — reordered here, once, rather than making every caller
+    handle both orderings."""
+    out = [(c.group(1), c.start(1), c.end(1)) for c in NAME_RE_OVERLAP.finditer(window)]
+    for m in _LASTFIRST_RE.finditer(window):
+        last, first = m.group(1), m.group(2)
+        out.append((f"{first} {last}", m.start(), m.end()))
+    return out
+
 _LOWER_TITLE_WORDS = {"of", "and", "for", "the", "in"}
 
 # Words that disqualify a NAME_RE candidate from being a real person's name.
@@ -186,6 +218,18 @@ _NAME_DISQUALIFYING_WORDS = {
     "classrooms", "faculty", "homeroom", "district", "campus",
     "students", "student", "parents", "parent", "grades", "grade",
     "kindergarten", "preschool", "academics", "curriculum",
+    # v8: two more real production fake names — "Achievement Report" and
+    # "It Fast" — both from school-district site nav/document links near
+    # a "Superintendent" title mention, same failure pattern as before,
+    # new domain-specific vocabulary the old blocklist hadn't seen yet.
+    "achievement", "report", "reports", "fast", "facts", "results",
+    "summary", "overview", "directory", "listing", "download", "upload",
+    "calendar", "menu", "lunch", "transportation", "athletics",
+    "activities", "announcement", "announcements", "handbook",
+    "enrollment", "boundaries", "information", "welcome", "click",
+    "here", "learn", "more", "visit", "explore", "portal", "login",
+    "schedule", "form", "forms", "application", "applications",
+    "first", "last", "name", "location", "position", "alphabetically",
 }
 
 
@@ -303,25 +347,25 @@ def _find_all_named_contacts(text: str, emails: list[str],
         window = text[max(0, m.start() - 120): m.end() + 120]
         offset = max(0, m.start() - 120)
         title_lo, title_hi = m.start() - offset, m.end() - offset
-        # Overlapping candidates (see NAME_RE_OVERLAP note above), minus
-        # anything overlapping the title span itself ("Certification
-        # Program" is two capitalized words too).
-        candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
-                         if (c.end(1) <= title_lo or c.start(1) >= title_hi)
-                         and _looks_like_person_name(c.group(1))]
+        # Candidates from BOTH "First Last" and "Last, First" formats,
+        # minus anything overlapping the title span itself
+        # ("Certification Program" is two capitalized words too).
+        candidates_nm = [c for c in _gather_name_candidates(window)
+                         if (c[2] <= title_lo or c[1] >= title_hi)
+                         and _looks_like_person_name(c[0])]
         if not candidates_nm:
             continue
-        candidates_nm.sort(key=lambda x: min(abs(x.start(1) - title_hi),
-                                             abs(title_lo - x.end(1))))
+        candidates_nm.sort(key=lambda x: min(abs(x[1] - title_hi),
+                                             abs(title_lo - x[2])))
         # Prefer the candidate whose email exists on this page — strongest
         # possible person<->email linkage; fall back to nearest name.
         nm, email = candidates_nm[0], ""
         for c in candidates_nm:
-            e = next((e for e in emails if _email_matches_name(e, c.group(1))), "")
+            e = next((e for e in emails if _email_matches_name(e, c[0])), "")
             if e:
                 nm, email = c, e
                 break
-        results.append((nm.group(1), smart_title(m.group(0)), email))
+        results.append((nm[0], smart_title(m.group(0)), email))
     return results
 
 
@@ -347,15 +391,15 @@ def _find_bare_name_email_pairs(text: str, emails: list[str]) -> list[tuple[str,
         window = text[max(0, idx - 40): idx + len(e) + 40]
         offset = max(0, idx - 40)
         e_lo, e_hi = idx - offset, idx - offset + len(e)
-        candidates_nm = [c for c in NAME_RE_OVERLAP.finditer(window)
-                         if (c.end(1) <= e_lo or c.start(1) >= e_hi)
-                         and _looks_like_person_name(c.group(1))]
+        candidates_nm = [c for c in _gather_name_candidates(window)
+                         if (c[2] <= e_lo or c[1] >= e_hi)
+                         and _looks_like_person_name(c[0])]
         if not candidates_nm:
             continue
-        candidates_nm.sort(key=lambda x: min(abs(x.start(1) - e_hi), abs(e_lo - x.end(1))))
+        candidates_nm.sort(key=lambda x: min(abs(x[1] - e_hi), abs(e_lo - x[2])))
         nm = candidates_nm[0]
-        if _email_matches_name(e, nm.group(1)):
-            results.append((nm.group(1), e))
+        if _email_matches_name(e, nm[0]):
+            results.append((nm[0], e))
     return results
 
 

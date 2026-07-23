@@ -523,6 +523,47 @@ def main():
           "now captured (previously discarded entirely), honestly labeled "
           "with an empty title and capped confidence")
 
+    # ---- v8 audit-fix regression checks: real production CSV findings ----
+    from enrich import _gather_name_candidates, _looks_like_person_name
+
+    # "Last, First" staff-directory format — the likely dominant reason
+    # teacher-email yield was near zero: real evidence had "Mora, Sara"
+    # and the old space-only regex could never see it at all.
+    real_text = ("Staff Directory. By PositionAlphabetically. Administration. "
+                "DB. Buffano ... 331-228-53503rd Grade Teacher- In-Classroom "
+                "TBESM. Mora, Sara. 331-228-541")
+    names_found = {c[0] for c in _gather_name_candidates(real_text)}
+    assert "Sara Mora" in names_found, \
+        f"Last,First format not detected in real evidence text: {names_found}"
+
+    # The exact two fake names from the real production CSV
+    assert not _looks_like_person_name("Achievement Report")
+    assert not _looks_like_person_name("It Fast")
+    print("  [ok] v8: 'Last, First' staff-directory format now detected "
+          "('Mora, Sara' -> 'Sara Mora'); 'Achievement Report'/'It Fast' "
+          "fake names (from real production CSV) now blocked")
+
+    # The false-positive this fix could have introduced, and did on the
+    # first attempt: "Name, Job Title" is structurally identical to
+    # "Last, First" and must NOT be misread as a person named e.g. "Math
+    # Bell" out of "Marcus Bell, Math Teacher".
+    jobtitle_text = "Marcus Bell, Math Teacher — contact us"
+    bogus = {c[0] for c in _gather_name_candidates(jobtitle_text)}
+    assert "Math Bell" not in bogus, \
+        f"'Name, JobTitle' misread as 'Last, First': {bogus}"
+    assert "Marcus Bell" in bogus, \
+        f"real space-form name should still be found: {bogus}"
+    print("  [ok] v8: 'Name, Job Title' convention (e.g. 'Marcus Bell, Math "
+          "Teacher') correctly NOT misread as a 'Last, First' person name")
+
+    # A common surname must never collide with a nav-word blocklist entry
+    # again — "bell" was added for "bell schedule" and silently ate every
+    # candidate named Bell (found via this exact regression).
+    assert _looks_like_person_name("Marcus Bell"), \
+        "a common surname was wrongly blocked by the nav-word blocklist"
+    print("  [ok] v8: common surname 'Bell' no longer collides with the "
+          "'bell schedule' nav-word blocklist entry")
+
     for l in leads:
         print(f"  lead: {l['tier']} {l['score']:>3} {l['icp_category']:<38} "
               f"{l['company_name']} [{l['contact_status']}]")
