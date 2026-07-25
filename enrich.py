@@ -177,6 +177,7 @@ def _gather_name_candidates(window: str) -> list[tuple[str, int, int]]:
         out.append((f"{first} {last}", m.start(), m.end()))
     return out
 
+
 _LOWER_TITLE_WORDS = {"of", "and", "for", "the", "in"}
 
 # Words that disqualify a NAME_RE candidate from being a real person's name.
@@ -197,7 +198,7 @@ _NAME_DISQUALIFYING_WORDS = {
     "director", "manager", "coordinator", "specialist", "administrator",
     "president", "chief", "officer", "executive", "chair", "chairman",
     "chairwoman", "vice", "senior", "associate", "assistant", "deputy",
-    "founder", "head", "lead", "supervisor", "board",
+    "founder", "head", "lead", "supervisor", "board", "superintendent",
     # institutional / navigational / address nouns
     "avenue", "street", "road", "boulevard", "drive", "suite", "floor",
     "building", "room", "community", "center", "centre", "resources",
@@ -218,10 +219,12 @@ _NAME_DISQUALIFYING_WORDS = {
     "classrooms", "faculty", "homeroom", "district", "campus",
     "students", "student", "parents", "parent", "grades", "grade",
     "kindergarten", "preschool", "academics", "curriculum",
-    # v8: two more real production fake names — "Achievement Report" and
+    # v8: two real production fake names — "Achievement Report" and
     # "It Fast" — both from school-district site nav/document links near
-    # a "Superintendent" title mention, same failure pattern as before,
-    # new domain-specific vocabulary the old blocklist hadn't seen yet.
+    # a "Superintendent" title mention. "bell" deliberately NOT here —
+    # it collided with the common surname "Bell" ("Marcus Bell") and
+    # cost a real teacher lead; "schedule" alone still catches "Bell
+    # Schedule" style nav phrases without the collision.
     "achievement", "report", "reports", "fast", "facts", "results",
     "summary", "overview", "directory", "listing", "download", "upload",
     "calendar", "menu", "lunch", "transportation", "athletics",
@@ -230,6 +233,20 @@ _NAME_DISQUALIFYING_WORDS = {
     "here", "learn", "more", "visit", "explore", "portal", "login",
     "schedule", "form", "forms", "application", "applications",
     "first", "last", "name", "location", "position", "alphabetically",
+    # v9: more real production fake names — "Fraud Magazine" (a
+    # publication name, not a person), "Medication Therapy" (a
+    # substring of the org's OWN name, "...Medication Therapy
+    # Management"), "Email Us" (a call-to-action link), "Recertification
+    # My" (nav-text fragment, likely "My Account"), "Early Childhood"
+    # (a program-name fragment) and "Find It" (a "Find It Fast" site-
+    # search widget — the exact same widget behind the earlier "It
+    # Fast" false positive, seen again on a different district's site,
+    # confirming it's boilerplate shared across many school-district
+    # website templates, not a one-off).
+    "magazine", "journal", "bulletin", "newsletter", "update", "updates",
+    "therapy", "medication", "management", "email", "us", "my",
+    "account", "signin", "subscribe", "recertification", "find", "it",
+    "early", "childhood",
 }
 
 
@@ -348,8 +365,8 @@ def _find_all_named_contacts(text: str, emails: list[str],
         offset = max(0, m.start() - 120)
         title_lo, title_hi = m.start() - offset, m.end() - offset
         # Candidates from BOTH "First Last" and "Last, First" formats,
-        # minus anything overlapping the title span itself
-        # ("Certification Program" is two capitalized words too).
+        # minus anything overlapping the title span itself ("Certification
+        # Program" is two capitalized words too).
         candidates_nm = [c for c in _gather_name_candidates(window)
                          if (c[2] <= title_lo or c[1] >= title_hi)
                          and _looks_like_person_name(c[0])]

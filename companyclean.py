@@ -104,6 +104,13 @@ _DOMAINLIKE_NAME_RE = re.compile(
 _CHROME_WORDS_RE = re.compile(
     r"^(home|homepage|welcome|website|site|portal|search|menu|index|"
     r"main page|official (web)?site|untitled)$", re.I)
+# "Welcome to PRA" (real production example): a leading "Welcome to"/
+# "Welcome to the" survives as company_name when the whole phrase has
+# no separator (no "|"/"-"/":") for the segment-splitter in
+# _clean_title_name to isolate "Welcome" as its own droppable segment —
+# the combined phrase just reads as one ordinary-looking name. Stripped
+# as its own step so the org name underneath ("PRA") still gets used.
+_WELCOME_PREFIX_RE = re.compile(r"^welcome to (the )?", re.I)
 # Unconditional chrome tails — no real org name ends in these:
 _CHROME_TAIL_RE = re.compile(r"\s+(website|homepage|portal|web ?page)$", re.I)
 # Conditional chrome tails — "Home"/"Site" CAN end a real name ("Sunrise
@@ -145,6 +152,7 @@ def _sanitize_name(name: str | None) -> str | None:
         name = _clean_title_name(name) or ""
         if not name:
             return None
+    name = _WELCOME_PREFIX_RE.sub("", name).strip()      # "Welcome to PRA" -> "PRA"
     name = _CHROME_TAIL_RE.sub("", name).strip()          # "... Homepage" -> "..."
     risky = _CHROME_TAIL_RISKY_RE.search(name)
     if risky:

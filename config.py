@@ -96,18 +96,20 @@ MAX_CONTACT_PAGES = 12      # max contact/about/team/staff/faculty paths
                             # the highest-value paths (reordered earlier so
                             # people/staff/faculty pages come first) while
                             # meaningfully cutting worst-case time per company.
-MAX_WORKERS = 30            # parallel threads for validate+enrich. Raised
-                            # again (20 -> 30): this work is network-bound
-                            # (waiting on other people's websites), so more
-                            # threads translate almost directly into
-                            # wall-clock speedup, not more load on any
-                            # single site (each thread hits a DIFFERENT
-                            # company). K-12 leads add real extra work per
-                            # company (a teacher-contact scan, sometimes
-                            # followed by an org-level fallback scan), so
-                            # more throughput is what actually buys back
-                            # the volume needed to clear 100+ leads within
-                            # the enforced time budget.
+MAX_WORKERS = 40            # parallel threads for validate+enrich. Raised
+                            # again (30 -> 40) specifically to close the
+                            # 88-vs-100+ lead gap seen in production: this
+                            # work is network-bound (waiting on other
+                            # people's websites), so more threads translate
+                            # almost directly into wall-clock speedup, not
+                            # more load on any single site (each thread
+                            # hits a DIFFERENT company). K-12 leads add
+                            # real extra work per company (a teacher-contact
+                            # scan, sometimes followed by an org-level
+                            # fallback scan), so more throughput is what
+                            # actually buys back the volume needed to
+                            # clear 100+ leads within the enforced time
+                            # budget.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 HeloknLeadBot/1.0"
