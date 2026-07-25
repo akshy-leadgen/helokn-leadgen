@@ -212,6 +212,48 @@ def test_deadline_enforcement_cuts_off_slow_work():
           f"completed {done_domains}, slow one correctly dropped\n")
 
 
+def test_gather_respects_deadline():
+    """Real production incident: a run got stuck with NO progress output
+    at all and had to be force-killed, because gather() (the Serper
+    search phase, which runs BEFORE process()) had no deadline of its
+    own — only process() did. A slow/stuck stretch during gathering was
+    therefore completely unbounded. This tests the real run.gather()
+    function directly with a deadline that's already in the past,
+    proving it stops immediately with whatever was found so far instead
+    of working through the entire query list regardless."""
+    print("TEST 7: gather() respects a deadline instead of running unbounded")
+    import time
+    import run
+
+    class SlowClient:
+        """Each call takes 0.2s — enough calls would take a while if
+        nothing stopped it early."""
+        def __init__(self):
+            self.fresh_calls = 0
+        def search(self, query):
+            time.sleep(0.2)
+            self.fresh_calls += 1
+            return {"organic": [{"title": "Our Certification Program",
+                                 "link": f"https://{query}.org/certification",
+                                 "snippet": "Our certification exam and candidate handbook."}]}
+
+    query_list = [(f"query_{i}", "Certification Body") for i in range(50)]
+    deadline = time.monotonic() + 0.5  # room for ~2 queries, not all 50
+
+    start = time.monotonic()
+    candidates, rejects = run.gather(SlowClient(), query_list, deadline=deadline)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, \
+        f"gather() ran for {elapsed:.1f}s — deadline did not stop it early " \
+        f"(this is the exact bug that caused a run to hang with zero " \
+        f"progress output and require a manual force-kill)"
+    assert len(candidates) < 50, \
+        f"expected gather() to stop well before all 50 queries: got {len(candidates)}"
+    print(f"  [ok] gather() stopped in {elapsed:.2f}s with {len(candidates)} "
+          f"candidates instead of running all 50 queries (~10s)\n")
+
+
 def test_collect_process_results_handles_none_entries():
     """Direct regression test for a bug that reached production: a
     results list with real (kind, payload) tuples MIXED WITH bare None
@@ -255,4 +297,5 @@ if __name__ == "__main__":
     test_export_survives_topup_crash()
     test_deadline_enforcement_cuts_off_slow_work()
     test_collect_process_results_handles_none_entries()
+    test_gather_respects_deadline()
     print("ALL RESILIENCE TESTS PASSED")

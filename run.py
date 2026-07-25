@@ -82,16 +82,34 @@ def parse_args():
     return p.parse_args()
 
 
-def gather(client, query_list):
+def gather(client, query_list, deadline=None):
     """Stage 1+2: search (cached) and junk-filter every organic result.
 
     A single query that fails all its retries (SerperRequestFailed) is
     logged and skipped — it does NOT abort the run and lose everything
     already gathered. Only a hit budget (BudgetExhausted) stops gathering
     entirely, since that's a deliberate limit, not a failure.
+
+    deadline (time.monotonic() timestamp) closes a real gap found in
+    production: process() enforces config.MAX_RUN_MINUTES, but gather()
+    previously had NO deadline of its own at all. Individual Serper
+    calls are bounded (10s timeout x 3 retries), but across 50+ queries
+    a bad stretch could still add up to a very long stall — and because
+    it happens before process() ever starts, no progress line prints and
+    the run looks completely silent/hung in the logs, exactly matching
+    a real incident where a run had to be force-killed with no visible
+    cause. Every query now prints as it's fetched, and the loop bails
+    out (exporting whatever candidates were already gathered) once the
+    deadline passes, same discipline as process().
     """
     candidates, rejects = [], []
-    for query, icp_hint in query_list:
+    for i, (query, icp_hint) in enumerate(query_list, 1):
+        if deadline is not None and time.monotonic() > deadline:
+            print(f"  ! Time budget reached during gathering ({i-1}/"
+                  f"{len(query_list)} queries done) — moving on with what "
+                  f"was found so far instead of continuing to search.")
+            break
+        print(f"  [1/5] query {i}/{len(query_list)}: {query[:60]}")
         try:
             data = client.search(query)
         except BudgetExhausted:
@@ -172,7 +190,7 @@ def main():
 
     # ---- Stage 1+2: gather + junk filter (primary query set) ----
     print(f"\n[1/5] Gathering: up to {primary} queries × {args.max_results} results")
-    candidates, rejects = gather(client, query_list[:primary])
+    candidates, rejects = gather(client, query_list[:primary], deadline=run_deadline)
     print(f"      raw kept: {len(candidates)}  junk rejected: {len(rejects)}")
 
     # ---- Stage 3: dedupe domains BEFORE any enrichment ----
@@ -310,7 +328,7 @@ def main():
         print(f"\n[3.5/5] {len(leads)} < target {args.target}: "
               f"topping up from query bank ({client.remaining_budget()} calls left)")
         try:
-            extra_c, extra_r = gather(client, QUERY_BANK[primary:])
+            extra_c, extra_r = gather(client, QUERY_BANK[primary:], deadline=run_deadline)
             rejects.extend(extra_r)
             seen = {l["domain"] for l in leads}
             extra_c = [c for c in dedupe(extra_c) if c.domain not in seen]

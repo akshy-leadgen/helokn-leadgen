@@ -143,6 +143,45 @@ def _keepalive_loop(stop_event: threading.Event):
             print(f"! keep-alive ping failed (non-fatal): {e}")
 
 
+def _call_with_timeout(fn, timeout_sec, *args, **kwargs):
+    """Runs fn(*args, **kwargs) with a hard wall-clock timeout, raising
+    TimeoutError if it doesn't finish in time.
+
+    Needed because the Supabase client's HTTP calls have no guaranteed
+    timeout of their own. A hang here happens AFTER run.py already
+    finished successfully and wrote good CSVs — completely invisible to
+    both of run.py's own internal deadlines (config.MAX_RUN_MINUTES
+    covers gather()/process(), not what happens after the subprocess
+    exits). This is a real, confirmed production failure mode: the
+    dashboard shows 'running' forever and zero new leads ever land in
+    Supabase, even though the pipeline itself did its job correctly —
+    looks exactly like "ran indefinitely, generated nothing."
+
+    Python can't forcibly kill a stuck thread, so a genuinely wedged
+    call keeps existing in the background until the container restarts
+    — but the MAIN flow stops waiting and reports an honest status
+    instead of hanging right along with it, which is the actual fix.
+    """
+    result = {}
+
+    def _target():
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except Exception as e:
+            result["error"] = e
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=timeout_sec)
+    if t.is_alive():
+        raise TimeoutError(
+            f"Supabase call did not complete within {timeout_sec}s — "
+            f"likely a network hang talking to Supabase itself.")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def _run_pipeline(mode: str, triggered_by: str, run_id: str):
     sb = supabase_export.get_client()
     stop_keepalive = threading.Event()
@@ -150,14 +189,17 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         target=_keepalive_loop, args=(stop_keepalive,), daemon=True)
     keepalive_thread.start()
     try:
-        sb.table("pipeline_runs").upsert({
-            "run_id": run_id, "status": "running",
-            "triggered_by": triggered_by,
-        }).execute()
+        _call_with_timeout(
+            lambda: sb.table("pipeline_runs").upsert({
+                "run_id": run_id, "status": "running",
+                "triggered_by": triggered_by,
+            }).execute(),
+            30,
+        )
 
         cmd = ["python", "-u", "run.py"] + (["--full"] if mode == "full" else [])
         # run.py now enforces its OWN wall-clock budget internally
-        # (config.MAX_RUN_MINUTES, 25 min) and exports whatever's done
+        # (config.MAX_RUN_MINUTES, 27 min) and exports whatever's done
         # by then — this external timeout is a safety margin ABOVE that
         # guarantee (covers the Serper query phase before the internal
         # clock starts, plus export overhead), not a guess at how long
@@ -170,15 +212,26 @@ def _run_pipeline(mode: str, triggered_by: str, run_id: str):
         leads = max(out.glob("helokn_leads_*.csv"), key=lambda p: p.stat().st_mtime)
         rejects = max(out.glob("rejected_candidates_*.csv"),
                       key=lambda p: p.stat().st_mtime)
-        supabase_export.push_run(str(leads), str(rejects), run_id, triggered_by)
+        # THE actual fix for this incident: previously unbounded, could
+        # hang forever after run.py already succeeded locally.
+        _call_with_timeout(
+            supabase_export.push_run, 120,
+            str(leads), str(rejects), run_id, triggered_by,
+        )
     except Exception as e:
         # Record the failure so the dashboard's "last run" status is honest
-        # instead of showing "running" forever.
+        # instead of showing "running" forever. Also timeout-wrapped: if
+        # Supabase itself is what's hanging, this call could hang too —
+        # without a timeout here, the safety net could hang right along
+        # with the thing it's supposed to report on.
         try:
-            sb.table("pipeline_runs").update({
-                "status": "failed", "error_message": str(e)[:4000],
-                "finished_at": "now()",
-            }).eq("run_id", run_id).execute()
+            _call_with_timeout(
+                lambda: sb.table("pipeline_runs").update({
+                    "status": "failed", "error_message": str(e)[:4000],
+                    "finished_at": "now()",
+                }).eq("run_id", run_id).execute(),
+                30,
+            )
         except Exception:
             pass
         raise

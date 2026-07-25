@@ -58,14 +58,19 @@ MAX_TEACHER_CONTACTS_PER_SCHOOL = 5  # up to N individual teacher emails per
                               # school, since "find teacher emails" means
                               # plural educators, not one org gatekeeper
 TARGET_LEADS = 100            # goal for a production run
-MAX_RUN_MINUTES = 25          # hard wall-clock budget for a --full run. This
+MAX_RUN_MINUTES = 27          # hard wall-clock budget for a --full run. This
                               # is an ENFORCED stop, not a hope: once reached,
                               # the pipeline stops starting new work and
                               # exports whatever's completed so far, rather
                               # than running indefinitely and relying on an
-                              # external process getting killed. Leaves a
-                              # 5-min margin under the "30 minutes at the
-                              # most" target.
+                              # external process getting killed. Raised
+                              # slightly (25 -> 27): with MAX_WORKERS also
+                              # raised below, this gives the adaptive top-up
+                              # pass (the mechanism that closes the gap to
+                              # 100+ leads) a real chance to actually run
+                              # instead of the primary pass alone consuming
+                              # the entire budget. Still 3 min of margin
+                              # under the "30 minutes at the most" target.
 
 # Test mode (the default) processes exactly this much:
 TEST_MODE_QUERIES = 1
@@ -91,16 +96,18 @@ MAX_CONTACT_PAGES = 12      # max contact/about/team/staff/faculty paths
                             # the highest-value paths (reordered earlier so
                             # people/staff/faculty pages come first) while
                             # meaningfully cutting worst-case time per company.
-MAX_WORKERS = 20            # parallel threads for validate+enrich. Raised
-                            # 10 -> 20: this work is network-bound (waiting
-                            # on other people's websites), so more threads
-                            # translate almost directly into wall-clock
-                            # speedup, not more load on any single site
-                            # (each thread hits a DIFFERENT company).
-                            # Combined with the MAX_RUN_MINUTES budget above,
-                            # this is what makes the 30-min target realistic
-                            # for the larger v7 query set instead of just
-                            # hoping the run finishes in time.
+MAX_WORKERS = 30            # parallel threads for validate+enrich. Raised
+                            # again (20 -> 30): this work is network-bound
+                            # (waiting on other people's websites), so more
+                            # threads translate almost directly into
+                            # wall-clock speedup, not more load on any
+                            # single site (each thread hits a DIFFERENT
+                            # company). K-12 leads add real extra work per
+                            # company (a teacher-contact scan, sometimes
+                            # followed by an org-level fallback scan), so
+                            # more throughput is what actually buys back
+                            # the volume needed to clear 100+ leads within
+                            # the enforced time budget.
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 HeloknLeadBot/1.0"
