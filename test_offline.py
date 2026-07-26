@@ -581,6 +581,40 @@ def main():
     print("  [ok] v9: 'Welcome to X' company-name prefix now stripped "
           "('Welcome to PRA' -> 'PRA')")
 
+    # ---- v10 audit-fix regression checks: third round of production findings ----
+    v10_bad_names = ["Esq Suchocki", "Review Course", "By Mail",
+                     "Content Assistance", "Criminal Law", "Physician Lookup",
+                     "Los Angeles", "Nadeau Consultants", "Emergency Medical"]
+    assert all(not _looks_like_person_name(n) for n in v10_bad_names), \
+        "a real v10 production fake name is no longer blocked"
+    v10_real_names = ["Ron Hanchar", "Meryl Dorf", "Janae Langreck",
+                      "Amanda Oliveira", "Roxy Aldred", "Pam Johnson-Carlson"]
+    assert all(_looks_like_person_name(n) for n in v10_real_names), \
+        "v10 blocklist expansion wrongly blocked a real name"
+    print("  [ok] v10: 'Esq Suchocki' (legal-title-suffix misread as a "
+          "first name), 'Review Course', 'By Mail', 'Content Assistance', "
+          "'Criminal Law', 'Physician Lookup', 'Los Angeles', 'Nadeau "
+          "Consultants', 'Emergency Medical' (real production fake names) "
+          "now blocked; real names unaffected")
+
+    # Query-bank interleaving: real production incident — K-12 queries sat
+    # at positions 45-58 of 59 and a run went from 8 K-12 leads to 0 with
+    # no code change, purely because gather()'s deadline (or an unlucky
+    # slow stretch) never reached that far into the list. Every category
+    # must now appear early enough to survive a run that only gets partway
+    # through the primary set.
+    from queries import QUERY_BANK as _QB
+    _cats_in_first_20 = {h for _, h in _QB[:20]}
+    _all_cats = {h for _, h in _QB}
+    assert len(_all_cats) >= 15, f"expected at least 15 ICP categories, got {len(_all_cats)}"
+    assert _cats_in_first_20 == _all_cats, \
+        f"not every category appears in the first 20 queries — a partial " \
+        f"run could still zero out a category by position: missing " \
+        f"{_all_cats - _cats_in_first_20}"
+    print(f"  [ok] v10: query bank interleaved — all {len(_all_cats)} ICP "
+          f"categories appear within the first 20 of {len(_QB)} queries, "
+          f"so a run cut short at ANY point still samples every category")
+
     for l in leads:
         print(f"  lead: {l['tier']} {l['score']:>3} {l['icp_category']:<38} "
               f"{l['company_name']} [{l['contact_status']}]")

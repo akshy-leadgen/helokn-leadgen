@@ -247,6 +247,23 @@ _NAME_DISQUALIFYING_WORDS = {
     "therapy", "medication", "management", "email", "us", "my",
     "account", "signin", "subscribe", "recertification", "find", "it",
     "early", "childhood",
+    # v10: third round of real production fake names.
+    # "Esq Suchocki" — a legal title suffix ("Esq.") following a comma
+    # after a real surname is structurally identical to "Last, First"
+    # (both are "Capitalized, Capitalized"), so it gets misread as if
+    # "Esq" were a first name. Blocking common professional-title
+    # abbreviations closes this whole class rather than one instance;
+    # jr/sr/ii/iii/iv/md/jd/phd/cpa are the same failure shape.
+    "esq", "jr", "sr", "ii", "iii", "iv", "md", "jd", "phd", "cpa",
+    # "Review Course", "By Mail", "Content Assistance", "Criminal Law",
+    # "Physician Lookup", "Los Angeles", "Nadeau Consultants",
+    # "Emergency Medical" — a course/product name, a payment-method
+    # instruction, a support link, a bar-association practice-area
+    # section, a directory tool, a city name, a firm-descriptor word,
+    # and EMS terminology, respectively. None are people.
+    "review", "course", "courses", "by", "mail", "content", "assistance",
+    "criminal", "physician", "lookup", "los", "angeles", "consultant",
+    "consultants", "emergency", "medical",
 }
 
 
