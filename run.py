@@ -171,7 +171,8 @@ def build_lead(cand, info, contact, s):
 def main():
     args = parse_args()
     production = args.full
-    run_deadline = (time.monotonic() + config.MAX_RUN_MINUTES * 60
+    run_start = time.monotonic()
+    run_deadline = (run_start + config.MAX_RUN_MINUTES * 60
                     if production else None)
 
     print("=" * 64)
@@ -190,8 +191,11 @@ def main():
 
     # ---- Stage 1+2: gather + junk filter (primary query set) ----
     print(f"\n[1/5] Gathering: up to {primary} queries × {args.max_results} results")
+    t_gather_start = time.monotonic()
     candidates, rejects = gather(client, query_list[:primary], deadline=run_deadline)
-    print(f"      raw kept: {len(candidates)}  junk rejected: {len(rejects)}")
+    t_gather_elapsed = time.monotonic() - t_gather_start
+    print(f"      raw kept: {len(candidates)}  junk rejected: {len(rejects)}"
+          f"  (gathering took {t_gather_elapsed:.0f}s)")
 
     # ---- Stage 3: dedupe domains BEFORE any enrichment ----
     candidates = dedupe(candidates)
@@ -314,7 +318,12 @@ def main():
         rejects.extend(new_rejects)
         return new_leads
 
+    n_candidates_for_process = len(candidates)
+    t_process_start = time.monotonic()
     leads = process(candidates, deadline=run_deadline)
+    t_process_elapsed = time.monotonic() - t_process_start
+    print(f"      primary validate+enrich took {t_process_elapsed:.0f}s "
+          f"for {n_candidates_for_process} candidates -> {len(leads)} leads")
 
     # ---- Adaptive top-up: only in production, only within budget ----
     # Wrapped defensively: this is a "nice to have" pass to close the gap
@@ -323,8 +332,12 @@ def main():
     # losing 89 good leads to a crash in an optional bonus step is a
     # correctness bug, not acceptable behavior.
     time_left = run_deadline is None or time.monotonic() < run_deadline
+    topup_ran = False
+    n_topup_candidates = 0
+    t_topup_elapsed = 0.0
     if production and len(leads) < args.target and client.remaining_budget() > 0 \
             and len(QUERY_BANK) > primary and time_left:
+        topup_ran = True
         print(f"\n[3.5/5] {len(leads)} < target {args.target}: "
               f"topping up from query bank ({client.remaining_budget()} calls left)")
         try:
@@ -332,7 +345,13 @@ def main():
             rejects.extend(extra_r)
             seen = {l["domain"] for l in leads}
             extra_c = [c for c in dedupe(extra_c) if c.domain not in seen]
-            leads.extend(process(extra_c, deadline=run_deadline))
+            n_topup_candidates = len(extra_c)
+            t_topup_start = time.monotonic()
+            topup_leads = process(extra_c, deadline=run_deadline)
+            t_topup_elapsed = time.monotonic() - t_topup_start
+            leads.extend(topup_leads)
+            print(f"      top-up validate+enrich took {t_topup_elapsed:.0f}s "
+                  f"for {n_topup_candidates} candidates -> {len(topup_leads)} leads")
         except Exception as e:
             print(f"  ! Top-up step failed ({type(e).__name__}: {e}). "
                   f"Exporting the {len(leads)} leads already gathered instead "
@@ -349,9 +368,22 @@ def main():
     rej_path = write_rejects(rejects, run_stamp=run_stamp)
 
     # ---- Summary ----
+    total_elapsed = time.monotonic() - run_start
     tiers = {t: sum(1 for l in leads if l["tier"] == t) for t in "ABC"}
     print("\n" + "=" * 64)
     print("RUN SUMMARY")
+    print(f"  Total wall-clock time              : {total_elapsed:.0f}s "
+          f"({total_elapsed/60:.1f} min)")
+    print(f"  Gathering (search) took            : {t_gather_elapsed:.0f}s")
+    print(f"  Primary validate+enrich took       : {t_process_elapsed:.0f}s "
+          f"for {n_candidates_for_process} candidates")
+    if topup_ran:
+        print(f"  Top-up validate+enrich took        : {t_topup_elapsed:.0f}s "
+              f"for {n_topup_candidates} candidates")
+    deadline_hit = production and run_deadline is not None and \
+        time.monotonic() >= run_deadline
+    print(f"  Time budget ({config.MAX_RUN_MINUTES} min) actually reached : "
+          f"{'YES — this run was genuinely time-limited' if deadline_hit else 'no'}")
     print(f"  Serper fresh calls (credits spent) : {client.fresh_calls}")
     print(f"  Serper cache hits (credits saved)  : {client.cache_hits}")
     print(f"  Junk / rejected candidates         : {len(rejects)}")
@@ -366,9 +398,17 @@ def main():
         for q in client.failed_queries:
             print(f"    - {q}")
     if production and len(leads) < args.target:
-        print(f"  NOTE: under target of {args.target}. Options: raise "
-              f"--max-queries (bank has {len(QUERY_BANK)} queries), add "
-              f"queries to queries.py, or loosen nothing — quality first.")
+        if deadline_hit:
+            print(f"  NOTE: under target of {args.target} AND the time budget was "
+                  f"reached — raising MAX_RUN_MINUTES or MAX_WORKERS would "
+                  f"plausibly help. This run was genuinely time-bound.")
+        else:
+            print(f"  NOTE: under target of {args.target}, but the time budget was "
+                  f"NOT reached ({total_elapsed/60:.1f} of {config.MAX_RUN_MINUTES} "
+                  f"min used) — more time/workers likely will NOT help. The "
+                  f"limiting factor is the number of qualifying candidates "
+                  f"found, not runtime. Look at rejected_candidates.csv to see "
+                  f"why raw candidates aren't converting, or expand queries.py.")
     print("=" * 64)
     return 0
 

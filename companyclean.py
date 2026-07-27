@@ -140,6 +140,13 @@ def _sanitize_name(name: str | None) -> str | None:
         return None
     # collapse whitespace (fixes 'Educationfor theNext' style mangling)
     name = re.sub(r"\s+", " ", name).strip(" -|·•\u00a0")
+    # "We Are the Voice ofAmerica's Banks" (real production example): the
+    # source HTML had zero whitespace between "of" and "America's" at
+    # all, so the collapse above has nothing to collapse — this is a
+    # missing space, not excess whitespace. Narrow on purpose: only a
+    # short list of common function words, so a legitimate camelCase
+    # brand name doesn't get incorrectly split.
+    name = re.sub(r"\b(of|the|and|in|on|for|to)([A-Z][a-z])", r"\1 \2", name)
     # trademark/registered marks are tagline indicators; strip the symbol
     # but remember we saw one — a ™'d string is a slogan, not an org name
     had_tm = "™" in name or "®" in name

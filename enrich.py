@@ -264,6 +264,21 @@ _NAME_DISQUALIFYING_WORDS = {
     "review", "course", "courses", "by", "mail", "content", "assistance",
     "criminal", "physician", "lookup", "los", "angeles", "consultant",
     "consultants", "emergency", "medical",
+    # v11: fourth round of real production fake names. "Business Law" is
+    # the SECOND "X Law" bar-association practice-area section seen
+    # (after "Criminal Law") — now blocking "law"/"business" generically
+    # rather than one more specific two-word phrase at a time, since the
+    # pattern has recurred. "Call Customer", "Pass Rates", "Latest In",
+    # "Working On", "Hours Open", "Language English", "Vision
+    # Governance", "Task Force", "Trustees Emerging", "Improvement Our",
+    # "Site Safety" are all nav-text/CTA/committee-name fragments; "Eagle
+    # Ford" is the Eagle Ford Shale (a Texas oil formation — TIPRO is an
+    # oil & gas association), not a person. "Ford" deliberately NOT
+    # blocked (common surname); "eagle" alone is the safe disqualifier.
+    "law", "business", "call", "customer", "inc", "credentialing",
+    "pass", "rates", "latest", "working", "hours", "open", "language",
+    "english", "vision", "governance", "task", "force", "trustees",
+    "emerging", "improvement", "our", "eagle", "site", "safety",
 }
 
 

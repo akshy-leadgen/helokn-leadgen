@@ -615,6 +615,32 @@ def main():
           f"categories appear within the first 20 of {len(_QB)} queries, "
           f"so a run cut short at ANY point still samples every category")
 
+    # ---- v11 audit-fix regression checks: fourth round of production findings ----
+    v11_bad_names = ["Call Customer", "Inc Credentialing", "Business Law",
+                     "Pass Rates", "Latest In", "Working On", "Hours Open",
+                     "Language English", "Vision Governance", "Task Force",
+                     "Trustees Emerging", "Improvement Our", "Eagle Ford",
+                     "Site Safety"]
+    assert all(not _looks_like_person_name(n) for n in v11_bad_names), \
+        "a real v11 production fake name is no longer blocked"
+    v11_real_names = ["Mike Rupprecht", "Lisa Quirk", "Wendy Aguilar",
+                      "Amy Barcelo", "Jennie Paxson", "John Ford", "Sarah Baker"]
+    assert all(_looks_like_person_name(n) for n in v11_real_names), \
+        "v11 blocklist expansion wrongly blocked a real name — note " \
+        "'Ford'/'Baker' as SURNAMES must survive even though 'Eagle' " \
+        "(a non-name word) is blocked"
+    print("  [ok] v11: 14 more real production fake names blocked "
+          "(nav-text/CTA fragments, a second 'X Law' practice-area name, "
+          "and 'Eagle Ford' the oil formation); common surnames like "
+          "'Ford' and 'Baker' deliberately left unblocked")
+
+    from companyclean import _sanitize_name as _sn2
+    assert _sn2("We Are the Voice ofAmerica's Banks") == \
+        "We Are the Voice of America's Banks", \
+        f"missing-space company name not fixed: {_sn2('We Are the Voice ofAmerica'+chr(39)+'s Banks')!r}"
+    print("  [ok] v11: missing-space company name fixed "
+          "('...ofAmerica's...' -> '...of America's...')")
+
     for l in leads:
         print(f"  lead: {l['tier']} {l['score']:>3} {l['icp_category']:<38} "
               f"{l['company_name']} [{l['contact_status']}]")
