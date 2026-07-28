@@ -38,13 +38,14 @@ SERPER_ENDPOINT = "https://google.serper.dev/search"
 # categories). v3: raised 65 -> 80 with 14 new top-up queries in untapped
 # institutional verticals. v7: raised 80 -> 95 after inserting 14 K-12/
 # teacher discovery queries into the GUARANTEED primary set (bumping
-# PRODUCTION_QUERY_COUNT 45 -> 59) — everything that used to start at
-# primary position 45 now starts at 59, so the budget needs to stretch
-# further to give those categories the same top-up headroom as before.
-# The disk cache makes previously-searched queries free on every
-# subsequent run, so raising the cap only spends credits on genuinely new
-# queries. Override with --max-queries.
-MAX_SERPER_QUERIES = 95       # hard cap on *fresh* Serper calls per run
+# PRODUCTION_QUERY_COUNT 45 -> 59). v12: raised 95 -> 110 after adding 14
+# Corporate L&D + 3 Structured Onboarding queries (rebalancing away from
+# a 3.5x skew toward large Certification Bodies) pushed the primary
+# count to 92 — this preserves meaningful top-up headroom (~18 queries)
+# rather than leaving only 3. The disk cache makes previously-searched
+# queries free on every subsequent run, so raising the cap only spends
+# credits on genuinely new queries. Override with --max-queries.
+MAX_SERPER_QUERIES = 110      # hard cap on *fresh* Serper calls per run
 MAX_RESULTS_PER_QUERY = 10    # Serper 'num'. NOTE: confirmed via testing that
                               # this account's plan hard-caps num at 10 —
                               # anything above returns HTTP 400 ("Query

@@ -615,6 +615,21 @@ def main():
           f"categories appear within the first 20 of {len(_QB)} queries, "
           f"so a run cut short at ANY point still samples every category")
 
+    # ---- v12 regression check: query bank rebalanced toward reachable buyers ----
+    from queries import PRODUCTION_QUERY_COUNT as _PQC
+    from collections import Counter as _Counter
+    _primary_counts = _Counter(h for q, h in _QB[:_PQC])
+    _cert_body_n = _primary_counts["Certification Body"]
+    _reachable_n = (_primary_counts["Corporate L&D Team"] +
+                    _primary_counts["Structured Onboarding / Training Program"])
+    assert _reachable_n >= _cert_body_n, \
+        f"Corporate L&D + Structured Onboarding ({_reachable_n}) should be " \
+        f"at least on par with Certification Body ({_cert_body_n}) in the " \
+        f"primary set — the whole point of the v12 rebalancing"
+    print(f"  [ok] v12: query bank rebalanced toward reachable buyers — "
+          f"Corporate L&D + Structured Onboarding ({_reachable_n} queries) "
+          f">= Certification Body ({_cert_body_n}) within the primary set")
+
     # ---- v11 audit-fix regression checks: fourth round of production findings ----
     v11_bad_names = ["Call Customer", "Inc Credentialing", "Business Law",
                      "Pass Rates", "Latest In", "Working On", "Hours Open",
